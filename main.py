@@ -1,6 +1,6 @@
 """Port Scanner giris noktasi.
 
-PHASE 5: eszamanli TCP connect tarama + temel servis tespiti.
+PHASE 6: eszamanli TCP connect tarama, servis tespiti ve gecikme olcumu.
 Tam CLI (argparse) PHASE 8'de gelecek.
 """
 
@@ -30,9 +30,12 @@ Too many threads can slow this machine and inflate timeouts.
 
 
 def format_open_result(result: PortScanResult) -> str:
+    parts = [f"[+] {result.port}", result.state.value]
     if result.service:
-        return f"[+] {result.port} {result.state.value} {result.service}"
-    return f"[+] {result.port} {result.state.value}"
+        parts.append(result.service)
+    if result.response_time is not None:
+        parts.append(f"{result.response_time * 1000:.1f}ms")
+    return " ".join(parts)
 
 
 def print_report(report: ScanReport) -> None:

@@ -92,7 +92,9 @@ def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
 
     The socket is non-blocking so Windows does not stack settimeout() plus
     select() into a double wait. The user timeout is enforced by select().
+    response_time is the probe duration in seconds (perf_counter).
     """
+    started = time.perf_counter()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setblocking(False)
     try:
@@ -100,16 +102,29 @@ def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
         if error_code in _IN_PROGRESS_CODES:
             error_code = _wait_for_connect(sock, timeout)
         state = _state_from_connect_code(error_code)
-        return PortScanResult(port=port, state=state, error_code=error_code)
+        return _timed_result(port, state, error_code, started)
     except socket.timeout:
-        return PortScanResult(port=port, state=PortState.TIMEOUT, error_code=None)
+        return _timed_result(port, PortState.TIMEOUT, None, started)
     except OSError as exc:
         code = exc.errno
-        if code in _REFUSED_CODES:
-            return PortScanResult(port=port, state=PortState.CLOSED, error_code=code)
-        return PortScanResult(port=port, state=PortState.TIMEOUT, error_code=code)
+        state = PortState.CLOSED if code in _REFUSED_CODES else PortState.TIMEOUT
+        return _timed_result(port, state, code, started)
     finally:
         sock.close()
+
+
+def _timed_result(
+    port: int,
+    state: PortState,
+    error_code: int | None,
+    started: float,
+) -> PortScanResult:
+    return PortScanResult(
+        port=port,
+        state=state,
+        error_code=error_code,
+        response_time=time.perf_counter() - started,
+    )
 
 
 def _wait_for_connect(sock: socket.socket, timeout: float) -> int:

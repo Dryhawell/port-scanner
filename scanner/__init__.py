@@ -1,6 +1,6 @@
 """Tarama motoru paketi.
 
-PHASE 5: dogrulama + eszamanli TCP connect tarama + servis tespiti.
+PHASE 6: dogrulama + eszamanli TCP connect tarama + servis tespiti + gecikme.
 """
 
 from scanner.models import PortScanResult, ScanReport
