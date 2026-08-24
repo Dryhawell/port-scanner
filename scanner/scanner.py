@@ -12,6 +12,7 @@ import socket
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from scanner.banner import grab_banner
 from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
@@ -102,7 +103,15 @@ def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
         if error_code in _IN_PROGRESS_CODES:
             error_code = _wait_for_connect(sock, timeout)
         state = _state_from_connect_code(error_code)
-        return _timed_result(port, state, error_code, started)
+        elapsed = time.perf_counter() - started
+        banner = grab_banner(sock, timeout) if state is PortState.OPEN else None
+        return PortScanResult(
+            port=port,
+            state=state,
+            error_code=error_code,
+            response_time=elapsed,
+            banner=banner,
+        )
     except socket.timeout:
         return _timed_result(port, PortState.TIMEOUT, None, started)
     except OSError as exc:

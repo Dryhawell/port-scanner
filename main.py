@@ -1,6 +1,6 @@
 """Port Scanner giris noktasi.
 
-PHASE 6: eszamanli TCP connect tarama, servis tespiti ve gecikme olcumu.
+PHASE 7: TCP connect tarama, servis tespiti, gecikme ve pasif banner.
 Tam CLI (argparse) PHASE 8'de gelecek.
 """
 
@@ -35,6 +35,8 @@ def format_open_result(result: PortScanResult) -> str:
         parts.append(result.service)
     if result.response_time is not None:
         parts.append(f"{result.response_time * 1000:.1f}ms")
+    if result.banner:
+        parts.append(result.banner)
     return " ".join(parts)
 
 
