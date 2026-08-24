@@ -1,6 +1,6 @@
 """Port Scanner giris noktasi.
 
-PHASE 4: ThreadPoolExecutor ile eszamanli TCP connect tarama.
+PHASE 5: eszamanli TCP connect tarama + temel servis tespiti.
 Tam CLI (argparse) PHASE 8'de gelecek.
 """
 
@@ -30,6 +30,8 @@ Too many threads can slow this machine and inflate timeouts.
 
 
 def format_open_result(result: PortScanResult) -> str:
+    if result.service:
+        return f"[+] {result.port} {result.state.value} {result.service}"
     return f"[+] {result.port} {result.state.value}"
 
 

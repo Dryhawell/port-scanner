@@ -1,11 +1,12 @@
 """Tarama motoru paketi.
 
-PHASE 4: dogrulama + eszamanli TCP connect tarama.
+PHASE 5: dogrulama + eszamanli TCP connect tarama + servis tespiti.
 """
 
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner, probe_tcp_port, resolve_ipv4
+from scanner.service import lookup_service
 from scanner.validator import (
     ValidationError,
     parse_port_range,
@@ -23,6 +24,7 @@ __all__ = [
     "ScannerError",
     "TcpConnectScanner",
     "ValidationError",
+    "lookup_service",
     "parse_port_range",
     "probe_tcp_port",
     "resolve_ipv4",

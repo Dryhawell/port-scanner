@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
+from scanner.service import lookup_service
 from scanner.validator import (
     validate_port_range,
     validate_target,
@@ -159,6 +160,7 @@ class TcpConnectScanner:
         )
         duration = time.perf_counter() - started
         results.sort(key=lambda item: item.port)
+        _attach_service_names(results)
 
         return ScanReport(
             target=cleaned_target,
@@ -189,3 +191,10 @@ def _scan_ports_concurrently(
         for future in as_completed(futures):
             results.append(future.result())
     return results
+
+
+def _attach_service_names(results: list[PortScanResult]) -> None:
+    """Fill the IANA/OS service hint on open ports only."""
+    for result in results:
+        if result.state is PortState.OPEN:
+            result.service = lookup_service(result.port, result.protocol)
