@@ -1,0 +1,5 @@
+# PHASE 1: runtime dependency yok.
+# Tarayici cekirdegi Python standart kutuphanesini kullanacak.
+#
+# Sonraki asamalar:
+# pytest>=8.0.0
