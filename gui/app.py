@@ -1,13 +1,16 @@
 """Tkinter GUI for the TCP connect scanner.
 
-PHASE 12 builds the window and runs the scan on the Tk main thread.
-The window can freeze on large ranges; PHASE 13 moves the scan to a worker.
+The scan runs on a background thread. Progress events travel through a
+thread-safe queue; only the Tk main thread touches widgets.
 """
 
 from __future__ import annotations
 
+import queue
+import threading
 import tkinter as tk
 from tkinter import ttk
+from typing import Any
 
 from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
 from scanner.models import PortScanResult, ScanReport
@@ -30,6 +33,7 @@ ENTRY_BG = "#21262d"
 BUTTON_BG = "#238636"
 BUTTON_FG = "#ffffff"
 COLUMNS = ("port", "state", "protocol", "service", "response_time", "banner")
+POLL_MS = 50
 
 
 def run_app() -> int:
@@ -50,6 +54,9 @@ class ScannerApp:
         self.root.minsize(820, 520)
         self.root.configure(bg=BG)
         self._scanner = TcpConnectScanner()
+        self._events: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._worker: threading.Thread | None = None
+        self._open_seen = 0
         self._build_style()
         self._build_layout()
 
@@ -236,35 +243,101 @@ class ScannerApp:
         entry.pack(fill="x", ipady=5)
 
     def start_scan(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            return
+
+        target = self.target_var.get()
+        start_port = self.start_port_var.get()
+        end_port = self.end_port_var.get()
+        timeout = self.timeout_var.get()
+        threads = self.threads_var.get()
+
         self._clear_table()
+        self._open_seen = 0
         self.progress["value"] = 0
         self.open_count_var.set("Open ports: 0")
         self.status_var.set("Scanning...")
         self.start_button.config(state="disabled")
-        self.root.update_idletasks()
+
+        self._worker = threading.Thread(
+            target=self._scan_worker,
+            args=(target, start_port, end_port, timeout, threads),
+            daemon=True,
+            name="scan-worker",
+        )
+        self._worker.start()
+        self.root.after(POLL_MS, self._poll_events)
+
+    def _scan_worker(
+        self,
+        target: str,
+        start_port: str,
+        end_port: str,
+        timeout: str,
+        threads: str,
+    ) -> None:
+        def on_progress(completed: int, total: int, result: PortScanResult) -> None:
+            self._events.put(("progress", completed, total, result))
 
         try:
             report = self._scanner.scan(
-                self.target_var.get(),
-                self.start_port_var.get(),
-                self.end_port_var.get(),
-                self.timeout_var.get(),
-                self.threads_var.get(),
+                target,
+                start_port,
+                end_port,
+                timeout,
+                threads,
+                on_progress=on_progress,
             )
         except ValidationError as exc:
             logger.error("%s", exc)
-            self._finish_with_error(str(exc))
+            self._events.put(("error", str(exc)))
             return
         except ScannerError as exc:
             logger.error("%s", exc)
-            self._finish_with_error(str(exc))
+            self._events.put(("error", str(exc)))
             return
-        except tk.TclError:
-            return
+        self._events.put(("done", report))
 
-        self._show_report(report)
+    def _poll_events(self) -> None:
+        try:
+            while True:
+                event = self._events.get_nowait()
+                kind = event[0]
+                if kind == "progress":
+                    _name, completed, total, result = event
+                    self._handle_progress(completed, total, result)
+                elif kind == "done":
+                    self._show_report(event[1])
+                    return
+                elif kind == "error":
+                    self._finish_with_error(event[1])
+                    return
+        except queue.Empty:
+            pass
+
+        if self._worker is not None and self._worker.is_alive():
+            self.root.after(POLL_MS, self._poll_events)
+        elif not self._events.empty():
+            self.root.after(POLL_MS, self._poll_events)
+
+    def _handle_progress(
+        self,
+        completed: int,
+        total: int,
+        result: PortScanResult,
+    ) -> None:
+        percent = (completed / total) * 100 if total else 100
+        self.progress["value"] = percent
+        if result.state is PortState.OPEN:
+            self._open_seen += 1
+            self.open_count_var.set(f"Open ports: {self._open_seen}")
+            self._insert_result(result)
+        self.status_var.set(
+            f"Scanning {result.port}...  {completed}/{total}  ({percent:.0f}%)"
+        )
 
     def _show_report(self, report: ScanReport) -> None:
+        self._clear_table()
         for result in report.results:
             self._insert_result(result)
         open_count = report.count(PortState.OPEN)

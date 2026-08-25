@@ -10,6 +10,7 @@ import errno
 import select
 import socket
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -27,6 +28,8 @@ from scanner.validator import (
 from utils.logger import get_logger
 
 logger = get_logger()
+
+ProgressCallback = Callable[[int, int, PortScanResult], None]
 
 
 class ScannerError(Exception):
@@ -176,6 +179,7 @@ class TcpConnectScanner:
         end_port: int | str,
         timeout: float | int | str = DEFAULT_TIMEOUT,
         max_workers: int | str = DEFAULT_MAX_WORKERS,
+        on_progress: ProgressCallback | None = None,
     ) -> ScanReport:
         """Validate input, resolve DNS, then probe ports concurrently."""
         cleaned_target = validate_target(target)
@@ -203,6 +207,7 @@ class TcpConnectScanner:
             end,
             timeout_seconds,
             workers,
+            on_progress,
         )
         duration = time.perf_counter() - started
         results.sort(key=lambda item: item.port)
@@ -240,16 +245,23 @@ def _scan_ports_concurrently(
     end: int,
     timeout: float,
     workers: int,
+    on_progress: ProgressCallback | None = None,
 ) -> list[PortScanResult]:
     """Submit one probe per port and collect results as they finish."""
     results: list[PortScanResult] = []
+    total = end - start + 1
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(probe_tcp_port, host, port, timeout)
             for port in range(start, end + 1)
         ]
-        for future in as_completed(futures):
-            results.append(future.result())
+        for completed, future in enumerate(as_completed(futures), start=1):
+            result = future.result()
+            if result.state is PortState.OPEN:
+                result.service = lookup_service(result.port, result.protocol)
+            results.append(result)
+            if on_progress is not None:
+                on_progress(completed, total, result)
     return results
 
 
