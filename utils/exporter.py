@@ -14,6 +14,9 @@ from pathlib import Path
 
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
+from utils.logger import get_logger
+
+logger = get_logger()
 
 REPORTS_DIR = Path("reports")
 JSON_INDENT = 2
@@ -68,6 +71,7 @@ def export_report(
         _write_json(report, output)
     else:
         _write_csv(report, output)
+    logger.info("Report saved: %s", output)
     return output
 
 
@@ -98,6 +102,7 @@ def _write_json(report: ScanReport, path: Path) -> None:
             encoding="utf-8",
         )
     except OSError as exc:
+        logger.error("Could not write JSON report: %s", exc)
         raise ExportError(f"Could not write JSON report: {exc}") from exc
 
 
@@ -110,6 +115,7 @@ def _write_csv(report: ScanReport, path: Path) -> None:
             for item in report.results:
                 writer.writerow(_result_to_csv_row(item))
     except OSError as exc:
+        logger.error("Could not write CSV report: %s", exc)
         raise ExportError(f"Could not write CSV report: {exc}") from exc
 
 

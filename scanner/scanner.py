@@ -24,6 +24,9 @@ from scanner.validator import (
     validate_threads,
     validate_timeout,
 )
+from utils.logger import get_logger
+
+logger = get_logger()
 
 
 class ScannerError(Exception):
@@ -77,6 +80,7 @@ def resolve_ipv4(target: str) -> str:
             type=socket.SOCK_STREAM,
         )
     except socket.gaierror as exc:
+        logger.error("Could not resolve hostname: %s", cleaned)
         raise ScannerError(f"Could not resolve hostname: {cleaned}") from exc
 
     if not infos:
@@ -96,6 +100,7 @@ def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
     select() into a double wait. The user timeout is enforced by select().
     response_time is the probe duration in seconds (perf_counter).
     """
+    logger.debug("Scanning port %s.", port)
     started = time.perf_counter()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setblocking(False)
@@ -106,19 +111,25 @@ def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
         state = _state_from_connect_code(error_code)
         elapsed = time.perf_counter() - started
         banner = grab_banner(sock, timeout) if state is PortState.OPEN else None
-        return PortScanResult(
+        result = PortScanResult(
             port=port,
             state=state,
             error_code=error_code,
             response_time=elapsed,
             banner=banner,
         )
+        _log_probe_result(result)
+        return result
     except socket.timeout:
-        return _timed_result(port, PortState.TIMEOUT, None, started)
+        result = _timed_result(port, PortState.TIMEOUT, None, started)
+        _log_probe_result(result)
+        return result
     except OSError as exc:
         code = exc.errno
         state = PortState.CLOSED if code in _REFUSED_CODES else PortState.TIMEOUT
-        return _timed_result(port, state, code, started)
+        result = _timed_result(port, state, code, started)
+        _log_probe_result(result)
+        return result
     finally:
         sock.close()
 
@@ -175,6 +186,15 @@ class TcpConnectScanner:
 
         port_count = end - start + 1
         workers = min(requested_workers, port_count)
+        logger.info(
+            "Scan started. target=%s resolved_ip=%s ports=%s-%s timeout=%s threads=%s",
+            cleaned_target,
+            resolved_ip,
+            start,
+            end,
+            timeout_seconds,
+            workers,
+        )
         started_at = datetime.now(timezone.utc)
         started = time.perf_counter()
         results = _scan_ports_concurrently(
@@ -188,7 +208,7 @@ class TcpConnectScanner:
         results.sort(key=lambda item: item.port)
         _attach_service_names(results)
 
-        return ScanReport(
+        report = ScanReport(
             target=cleaned_target,
             resolved_ip=resolved_ip,
             start_port=start,
@@ -199,6 +219,19 @@ class TcpConnectScanner:
             duration=duration,
             started_at=started_at,
         )
+        open_count = report.count(PortState.OPEN)
+        closed_count = report.count(PortState.CLOSED)
+        timeout_count = report.count(PortState.TIMEOUT)
+        logger.info(
+            "Scan finished. open=%s closed=%s timeout=%s duration=%.2fs",
+            open_count,
+            closed_count,
+            timeout_count,
+            duration,
+        )
+        if timeout_count:
+            logger.warning("Connection timeout on %s port(s).", timeout_count)
+        return report
 
 
 def _scan_ports_concurrently(
@@ -225,3 +258,9 @@ def _attach_service_names(results: list[PortScanResult]) -> None:
     for result in results:
         if result.state is PortState.OPEN:
             result.service = lookup_service(result.port, result.protocol)
+
+
+def _log_probe_result(result: PortScanResult) -> None:
+    logger.debug("Port %s %s.", result.port, result.state.value)
+    if result.state is PortState.TIMEOUT:
+        logger.debug("Connection timeout on port %s.", result.port)

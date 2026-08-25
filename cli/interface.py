@@ -22,6 +22,7 @@ from utils.exporter import (
     export_report,
     infer_format,
 )
+from utils.logger import setup_logging
 
 _STATE_PREFIX = {
     PortState.OPEN: "[+]",
@@ -87,6 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[item.value for item in ExportFormat],
         help="Report format: json or csv (default: json when exporting)",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Print DEBUG log lines to the console (the log file always stores DEBUG)",
+    )
     return parser
 
 
@@ -136,11 +143,13 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
 def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    logger = setup_logging(verbose=args.verbose)
 
     try:
         target = validate_target(args.target)
         start_port, end_port = parse_port_range(args.ports)
     except ValidationError as exc:
+        logger.error("%s", exc)
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -156,12 +165,15 @@ def run(argv: list[str] | None = None) -> int:
             args.threads,
         )
     except ValidationError as exc:
+        logger.error("%s", exc)
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except ScannerError as exc:
+        logger.error("%s", exc)
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
+        logger.warning("Scan interrupted.")
         print("\nScan interrupted.", file=sys.stderr)
         return 130
 
@@ -170,6 +182,7 @@ def run(argv: list[str] | None = None) -> int:
     try:
         saved = _maybe_export(report, args.output, args.format)
     except ExportError as exc:
+        logger.error("%s", exc)
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
