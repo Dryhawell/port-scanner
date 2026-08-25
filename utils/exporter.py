@@ -35,7 +35,8 @@ class ExportError(ValueError):
 def report_to_dict(report: ScanReport) -> dict[str, object]:
     """Serialize a scan into a stable JSON-friendly dictionary."""
     open_ports = [item.port for item in report.open_results]
-    return {
+    scanned_ports = [item.port for item in report.results]
+    payload: dict[str, object] = {
         "tool": APP_NAME,
         "version": APP_VERSION,
         "scan_method": "tcp_connect",
@@ -58,6 +59,10 @@ def report_to_dict(report: ScanReport) -> dict[str, object]:
         },
         "results": [_result_to_dict(item) for item in report.results],
     }
+    contiguous = scanned_ports == list(range(report.start_port, report.end_port + 1))
+    if scanned_ports and not contiguous:
+        payload["ports"] = scanned_ports
+    return payload
 
 
 def export_report(

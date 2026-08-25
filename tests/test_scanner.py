@@ -98,3 +98,22 @@ def test_scan_collects_sorted_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report.count(PortState.CLOSED) == 2
     assert report.resolved_ip == "127.0.0.1"
     assert report.duration is not None
+
+
+def test_scan_accepts_explicit_port_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("scanner.scanner.resolve_ipv4", lambda _target: "127.0.0.1")
+    monkeypatch.setattr("scanner.scanner.lookup_service", lambda _port, _protocol="tcp": None)
+
+    def fake_probe(_host: str, port: int, _timeout: float) -> PortScanResult:
+        return PortScanResult(port=port, state=PortState.CLOSED)
+
+    monkeypatch.setattr("scanner.scanner.probe_tcp_port", fake_probe)
+    report = TcpConnectScanner().scan(
+        "127.0.0.1",
+        timeout=0.5,
+        max_workers=2,
+        ports=[443, 80, 80],
+    )
+
+    assert [item.port for item in report.results] == [80, 443]
+    assert report.port_label() == "80,443"

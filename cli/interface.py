@@ -18,11 +18,17 @@ from scanner.constants import (
     DEFAULT_TIMEOUT,
     MAX_WORKERS,
     PROGRESS_BAR_WIDTH,
+    SCAN_PROFILES,
 )
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
-from scanner.validator import ValidationError, parse_port_range, validate_target
+from scanner.validator import (
+    ValidationError,
+    parse_ports,
+    resolve_scan_profile,
+    validate_target,
+)
 from utils.exporter import (
     ExportError,
     ExportFormat,
@@ -49,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "examples:\n"
             "  python main.py --gui\n"
+            "  python main.py --target 127.0.0.1 --profile quick\n"
+            "  python main.py --target 127.0.0.1 --ports 22,80,443\n"
             "  python main.py --target 127.0.0.1 --ports 1-1000\n"
             "  python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5\n"
             "  python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json\n"
@@ -77,7 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ports",
         "-p",
-        help="Single port or inclusive range, e.g. 80 or 1-1000 (required for CLI)",
+        help="Port list or range, e.g. 80, 1-1000, or 22,80,443",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=sorted(SCAN_PROFILES),
+        help="Scan a named port set: quick or common (instead of --ports)",
     )
     parser.add_argument(
         "--timeout",
@@ -134,7 +147,7 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
     timeout_count = report.count(PortState.TIMEOUT)
 
     print(f"Target: {report.target} ({report.resolved_ip})")
-    print(f"Ports:  {report.start_port}-{report.end_port}")
+    print(f"Ports:  {report.port_label()}")
     print(f"Timeout: {report.timeout}s")
     print(f"Threads: {report.max_workers}")
     if report.duration is not None:
@@ -183,14 +196,22 @@ def run(argv: list[str] | None = None) -> int:
 
         return run_app()
 
-    if not args.target or not args.ports:
-        parser.error("--target and --ports are required unless --gui is used")
+    if not args.target:
+        parser.error("--target is required unless --gui is used")
+    if args.ports and args.profile:
+        parser.error("use either --ports or --profile, not both")
+    if not args.ports and not args.profile:
+        parser.error("--ports or --profile is required unless --gui is used")
 
     logger = setup_logging(verbose=args.verbose)
 
     try:
         target = validate_target(args.target)
-        start_port, end_port = parse_port_range(args.ports)
+        port_list = (
+            resolve_scan_profile(args.profile)
+            if args.profile
+            else parse_ports(args.ports)
+        )
     except ValidationError as exc:
         return _cli_error(logger, exc)
 
@@ -210,11 +231,10 @@ def run(argv: list[str] | None = None) -> int:
     try:
         report = TcpConnectScanner().scan(
             target,
-            start_port,
-            end_port,
-            args.timeout,
-            args.threads,
+            timeout=args.timeout,
+            max_workers=args.threads,
             on_progress=on_progress,
+            ports=port_list,
         )
     except ValidationError as exc:
         _end_progress_line(args.verbose)

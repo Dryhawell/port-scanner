@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
-from scanner.constants import APP_VERSION, DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
+from scanner.constants import APP_VERSION, DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT, SCAN_PROFILES
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
@@ -80,6 +80,13 @@ class ScannerApp:
         )
         style.map("Treeview", background=[("selected", BUTTON_BG)])
         style.configure(
+            "TCombobox",
+            fieldbackground=ENTRY_BG,
+            background=ENTRY_BG,
+            foreground=FG,
+            arrowcolor=FG,
+        )
+        style.configure(
             "Scan.Horizontal.TProgressbar",
             troughcolor=ENTRY_BG,
             background=ACCENT,
@@ -122,6 +129,7 @@ class ScannerApp:
         self.end_port_var = tk.StringVar(value="100")
         self.timeout_var = tk.StringVar(value=str(DEFAULT_TIMEOUT))
         self.threads_var = tk.StringVar(value=str(DEFAULT_MAX_WORKERS))
+        self.profile_var = tk.StringVar(value="Custom")
 
         fields = (
             ("Target IP / Hostname", self.target_var, 0, 0, 2),
@@ -132,6 +140,14 @@ class ScannerApp:
         )
         for label, variable, row, column, span in fields:
             self._labeled_entry(inner, label, variable, row, column, span)
+        self._labeled_combo(
+            inner,
+            "Profile",
+            self.profile_var,
+            1,
+            2,
+            ("Custom", "Quick", "Common"),
+        )
 
         self.start_button = tk.Button(
             inner,
@@ -147,7 +163,7 @@ class ScannerApp:
             padx=18,
             pady=8,
         )
-        self.start_button.grid(row=1, column=2, columnspan=2, sticky="e", padx=8, pady=8)
+        self.start_button.grid(row=1, column=3, sticky="e", padx=8, pady=8)
         for index in range(4):
             inner.grid_columnconfigure(index, weight=1)
 
@@ -246,6 +262,27 @@ class ScannerApp:
         )
         entry.pack(fill="x", ipady=5)
 
+    def _labeled_combo(
+        self,
+        parent: tk.Frame,
+        label: str,
+        variable: tk.StringVar,
+        row: int,
+        column: int,
+        values: tuple[str, ...],
+    ) -> None:
+        cell = tk.Frame(parent, bg=PANEL)
+        cell.grid(row=row, column=column, sticky="ew", padx=8, pady=6)
+        tk.Label(cell, text=label, bg=PANEL, fg=MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+        combo = ttk.Combobox(
+            cell,
+            textvariable=variable,
+            values=values,
+            state="readonly",
+            font=("Consolas", 11),
+        )
+        combo.pack(fill="x", ipady=3)
+
     def start_scan(self) -> None:
         if self._worker is not None and self._worker.is_alive():
             return
@@ -255,6 +292,7 @@ class ScannerApp:
         end_port = self.end_port_var.get()
         timeout = self.timeout_var.get()
         threads = self.threads_var.get()
+        profile = self.profile_var.get()
 
         self._clear_table()
         self._open_seen = 0
@@ -265,7 +303,7 @@ class ScannerApp:
 
         self._worker = threading.Thread(
             target=self._scan_worker,
-            args=(target, start_port, end_port, timeout, threads),
+            args=(target, start_port, end_port, timeout, threads, profile),
             daemon=True,
             name="scan-worker",
         )
@@ -279,19 +317,30 @@ class ScannerApp:
         end_port: str,
         timeout: str,
         threads: str,
+        profile: str,
     ) -> None:
         def on_progress(completed: int, total: int, result: PortScanResult) -> None:
             self._events.put(("progress", completed, total, result))
 
+        profile_key = profile.strip().lower()
         try:
-            report = self._scanner.scan(
-                target,
-                start_port,
-                end_port,
-                timeout,
-                threads,
-                on_progress=on_progress,
-            )
+            if profile_key in SCAN_PROFILES:
+                report = self._scanner.scan(
+                    target,
+                    timeout=timeout,
+                    max_workers=threads,
+                    on_progress=on_progress,
+                    ports=SCAN_PROFILES[profile_key],
+                )
+            else:
+                report = self._scanner.scan(
+                    target,
+                    start_port,
+                    end_port,
+                    timeout,
+                    threads,
+                    on_progress=on_progress,
+                )
         except ValidationError as exc:
             logger.error("%s", exc)
             self._events.put(("error", str(exc)))
@@ -349,7 +398,7 @@ class ScannerApp:
         duration = f"{report.duration:.2f}s" if report.duration is not None else "?"
         self.status_var.set(
             f"Done. {report.target} ({report.resolved_ip})  |  "
-            f"{report.start_port}-{report.end_port}  |  {duration}"
+            f"{report.port_label()}  |  {duration}"
         )
         self.progress["value"] = 100
         self.start_button.config(state="normal")

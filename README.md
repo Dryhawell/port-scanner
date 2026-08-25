@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.1.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
+Version **1.2.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -13,7 +13,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 ## Features
 
 - IPv4 address and hostname targets (hostname syntax check, then DNS at scan time)
-- Inclusive port range `1-65535` with input validation
+- Inclusive port range `1-65535`, comma-separated lists (`22,80,443`), and named profiles (`quick`, `common`)
 - Concurrent TCP connect scan via `ThreadPoolExecutor` (default 50 workers, max 200)
 - OPEN / CLOSED / TIMEOUT classification from `connect_ex` / `SO_ERROR`
 - Service-name hint with `socket.getservbyport()` (IANA/OS table, not proof of the app)
@@ -56,12 +56,15 @@ python main.py --help
 python main.py --version
 python main.py --gui
 python main.py --target 127.0.0.1 --ports 1-1000
+python main.py --target 127.0.0.1 --ports 22,80,443
+python main.py --target 127.0.0.1 --profile quick
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--target` / `-t` | IPv4 or hostname (required for CLI) |
-| `--ports` / `-p` | `80` or `1-1000` (required for CLI) |
+| `--ports` / `-p` | `80`, `1-1000`, or `22,80,443` (required unless `--profile`) |
+| `--profile` | Named port set: `quick` or `common` (instead of `--ports`) |
 | `--timeout` | Connect timeout in seconds (default `0.5`) |
 | `--threads` | Max workers, `1-200` (default `50`) |
 | `--show-closed` | Print CLOSED and TIMEOUT as well as OPEN |
@@ -76,6 +79,9 @@ Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. Th
 
 ```powershell
 python main.py --target 127.0.0.1 --ports 1-1000
+python main.py --target 127.0.0.1 --ports 22,80,443
+python main.py --target 127.0.0.1 --profile quick
+python main.py --target 127.0.0.1 --profile common --show-closed
 python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5
 python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json
 python main.py --target 127.0.0.1 --ports 22 --format csv
@@ -88,7 +94,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target, start/end port, timeout, threads, **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Response Time, Banner).
+Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Response Time, Banner). Quick and Common ignore the start/end fields and scan those named port sets.
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -121,7 +127,7 @@ main.py                 entry point
 cli/interface.py        argparse, console report
 gui/app.py              Tkinter UI + background worker
 scanner/
-  validator.py          target / port / timeout / threads
+  validator.py          target / ports / profiles / timeout / threads
   scanner.py            TCP connect engine
   port.py               OPEN / CLOSED / TIMEOUT
   models.py             PortScanResult, ScanReport
@@ -139,7 +145,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner`.
 
 ## How It Works
 
-1. Validate target, port range, timeout, and thread count.
+1. Validate target, ports (range, list, or profile), timeout, and thread count.
 2. Resolve hostname to IPv4 with `socket.getaddrinfo` (`AF_INET` only).
 3. Probe each port concurrently (bounded thread pool).
 4. Map the connect result to OPEN / CLOSED / TIMEOUT.
@@ -213,7 +219,6 @@ Logs and reports may contain IP addresses, port numbers, and banners. Do not log
 - Advanced service detection
 - Better banner parsing
 - Host discovery
-- Scan profiles
 - Scheduled authorized scans
 - HTML / PDF reports
 - Scan history in a database

@@ -10,7 +10,7 @@ import ipaddress
 import re
 from typing import Final
 
-from scanner.constants import MAX_PORT, MAX_WORKERS, MIN_PORT
+from scanner.constants import MAX_PORT, MAX_WORKERS, MIN_PORT, SCAN_PROFILES
 
 # Four decimal groups, e.g. 127.0.0.1 or 999.1.1.1 (shape only, not validity).
 _IPV4_SHAPE: Final[re.Pattern[str]] = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
@@ -93,6 +93,36 @@ def parse_port_range(value: str) -> tuple[int, int]:
 
     port = validate_port(cleaned)
     return port, port
+
+
+def parse_ports(value: str) -> list[int]:
+    """Parse ports as a single value, a range, or a comma-separated mix.
+
+    Examples:
+        "80"           -> [80]
+        "1-1000"       -> [1, 2, ..., 1000]
+        "22,80,443"    -> [22, 80, 443]
+        "22,80-82,443" -> [22, 80, 81, 82, 443]
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError("Invalid port range.")
+
+    ports: list[int] = []
+    for chunk in value.split(","):
+        start, end = parse_port_range(chunk)
+        ports.extend(range(start, end + 1))
+    return sorted(set(ports))
+
+
+def resolve_scan_profile(name: str) -> list[int]:
+    """Return the port list for a named profile (quick or common)."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValidationError("Unknown scan profile. Use quick or common.")
+    key = name.strip().lower()
+    profile = SCAN_PROFILES.get(key)
+    if profile is None:
+        raise ValidationError("Unknown scan profile. Use quick or common.")
+    return list(profile)
 
 
 def validate_timeout(timeout: float | int | str) -> float:

@@ -53,3 +53,18 @@ class ScanReport:
 
     def count(self, state: PortState) -> int:
         return sum(1 for item in self.results if item.state is state)
+
+    def port_label(self) -> str:
+        """Compact label: 1-1000 for a contiguous range, else a short list."""
+        ports = [item.port for item in self.results]
+        if not ports:
+            if self.start_port == self.end_port:
+                return str(self.start_port)
+            return f"{self.start_port}-{self.end_port}"
+        if ports == list(range(ports[0], ports[-1] + 1)):
+            if ports[0] == ports[-1]:
+                return str(ports[0])
+            return f"{ports[0]}-{ports[-1]}"
+        if len(ports) <= 12:
+            return ",".join(str(port) for port in ports)
+        return f"{ports[0]},{ports[1]},... ({len(ports)} ports)"

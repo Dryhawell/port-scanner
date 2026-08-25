@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import pytest
 
+from scanner.constants import SCAN_PROFILES
 from scanner.validator import (
     ValidationError,
     parse_port_range,
+    parse_ports,
+    resolve_scan_profile,
     validate_port,
     validate_port_range,
     validate_target,
@@ -73,6 +76,27 @@ def test_invalid_port_range() -> None:
         parse_port_range("1-2-3")
     with pytest.raises(ValidationError, match="Invalid port range"):
         parse_port_range("")
+
+
+def test_parse_ports_list_and_range() -> None:
+    assert parse_ports("80") == [80]
+    assert parse_ports("22,80,443") == [22, 80, 443]
+    assert parse_ports("22,80-82,443") == [22, 80, 81, 82, 443]
+    assert parse_ports("443,80,80") == [80, 443]
+
+
+def test_parse_ports_rejects_empty() -> None:
+    with pytest.raises(ValidationError, match="Invalid port range"):
+        parse_ports("")
+    with pytest.raises(ValidationError, match="Invalid port range"):
+        parse_ports("22,,80")
+
+
+def test_resolve_scan_profile() -> None:
+    assert resolve_scan_profile("quick") == list(SCAN_PROFILES["quick"])
+    assert resolve_scan_profile(" COMMON ") == list(SCAN_PROFILES["common"])
+    with pytest.raises(ValidationError, match="Unknown scan profile"):
+        resolve_scan_profile("stealth")
 
 
 def test_timeout_and_threads() -> None:

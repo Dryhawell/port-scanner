@@ -10,7 +10,7 @@ import errno
 import select
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -20,6 +20,8 @@ from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.service import lookup_service
 from scanner.validator import (
+    ValidationError,
+    validate_port,
     validate_port_range,
     validate_target,
     validate_threads,
@@ -156,27 +158,31 @@ class TcpConnectScanner:
     def scan(
         self,
         target: str,
-        start_port: int | str,
-        end_port: int | str,
+        start_port: int | str | None = None,
+        end_port: int | str | None = None,
         timeout: float | int | str = DEFAULT_TIMEOUT,
         max_workers: int | str = DEFAULT_MAX_WORKERS,
         on_progress: ProgressCallback | None = None,
+        ports: Sequence[int] | None = None,
     ) -> ScanReport:
         """Validate input, resolve DNS, then probe ports concurrently."""
         cleaned_target = validate_target(target)
-        start, end = validate_port_range(start_port, end_port)
+        port_list = _resolve_port_list(start_port, end_port, ports)
         timeout_seconds = validate_timeout(timeout)
         requested_workers = validate_threads(max_workers)
         resolved_ip = resolve_ipv4(cleaned_target)
 
-        port_count = end - start + 1
+        port_count = len(port_list)
         workers = min(requested_workers, port_count)
+        start = port_list[0]
+        end = port_list[-1]
         logger.info(
-            "Scan started. target=%s resolved_ip=%s ports=%s-%s timeout=%s threads=%s",
+            "Scan started. target=%s resolved_ip=%s ports=%s-%s count=%s timeout=%s threads=%s",
             cleaned_target,
             resolved_ip,
             start,
             end,
+            port_count,
             timeout_seconds,
             workers,
         )
@@ -184,8 +190,7 @@ class TcpConnectScanner:
         started = time.perf_counter()
         results = _scan_ports_concurrently(
             resolved_ip,
-            start,
-            end,
+            port_list,
             timeout_seconds,
             workers,
             on_progress,
@@ -219,21 +224,36 @@ class TcpConnectScanner:
         return report
 
 
+def _resolve_port_list(
+    start_port: int | str | None,
+    end_port: int | str | None,
+    ports: Sequence[int] | None,
+) -> list[int]:
+    if ports is not None:
+        unique = sorted({validate_port(port) for port in ports})
+        if not unique:
+            raise ValidationError("Invalid port range.")
+        return unique
+    if start_port is None or end_port is None:
+        raise ValidationError("Invalid port range.")
+    start, end = validate_port_range(start_port, end_port)
+    return list(range(start, end + 1))
+
+
 def _scan_ports_concurrently(
     host: str,
-    start: int,
-    end: int,
+    ports: Sequence[int],
     timeout: float,
     workers: int,
     on_progress: ProgressCallback | None = None,
 ) -> list[PortScanResult]:
     """Submit one probe per port and collect results as they finish."""
     results: list[PortScanResult] = []
-    total = end - start + 1
+    total = len(ports)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(probe_tcp_port, host, port, timeout)
-            for port in range(start, end + 1)
+            for port in ports
         ]
         for completed, future in enumerate(as_completed(futures), start=1):
             result = future.result()

@@ -7,7 +7,7 @@ Port ranges below are conventional IANA groupings, not proof of a service:
 """
 
 APP_NAME = "port-scanner"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 MIN_PORT = 1
 MAX_PORT = 65535
@@ -22,3 +22,13 @@ PROGRESS_BAR_WIDTH = 16
 
 WELL_KNOWN_PORT_MAX = 1023
 REGISTERED_PORT_MAX = 49151
+
+# Named sets for --profile. These are common listening ports, not a vuln list.
+SCAN_PROFILES: dict[str, tuple[int, ...]] = {
+    "quick": (21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 3306, 3389, 8080),
+    "common": (
+        20, 21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 161, 389, 443,
+        445, 465, 587, 993, 995, 1433, 1521, 1723, 2049, 3306, 3389, 5432,
+        5900, 6379, 8080, 8443, 27017,
+    ),
+}
