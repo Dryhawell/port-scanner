@@ -1,7 +1,4 @@
-"""Port Scanner giris noktasi.
-
-CLI argparse ile parametreleri alir; asil tarama scanner paketindedir.
-"""
+"""Entry point: CLI by default, or the Tkinter GUI with --gui."""
 
 from __future__ import annotations
 

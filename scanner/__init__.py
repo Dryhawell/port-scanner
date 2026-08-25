@@ -1,7 +1,4 @@
-"""Tarama motoru paketi.
-
-PHASE 7: TCP connect tarama, servis tespiti, gecikme ve pasif banner.
-"""
+"""TCP connect scan engine: validation, probing, service hints, and banners."""
 
 from scanner.banner import grab_banner, sanitize_banner
 from scanner.models import PortScanResult, ScanReport

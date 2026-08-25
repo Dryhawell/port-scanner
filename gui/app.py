@@ -26,7 +26,6 @@ PANEL = "#161b22"
 FG = "#e6edf3"
 MUTED = "#8b949e"
 ACCENT = "#3fb950"
-OPEN = "#3fb950"
 CLOSED = "#f85149"
 TIMEOUT = "#d29922"
 ENTRY_BG = "#21262d"
@@ -79,7 +78,7 @@ class ScannerApp:
             relief="flat",
             font=("Segoe UI", 9, "bold"),
         )
-        style.map("Treeview", background=[("selected", "#238636")])
+        style.map("Treeview", background=[("selected", BUTTON_BG)])
         style.configure(
             "Scan.Horizontal.TProgressbar",
             troughcolor=ENTRY_BG,
@@ -108,7 +107,12 @@ class ScannerApp:
             font=("Segoe UI", 9),
         ).pack(anchor="w")
 
-        form = tk.Frame(self.root, bg=PANEL, highlightbackground="#30363d", highlightthickness=1)
+        form = tk.Frame(
+            self.root,
+            bg=PANEL,
+            highlightbackground="#30363d",
+            highlightthickness=1,
+        )
         form.pack(fill="x", padx=16, pady=(4, 8))
         inner = tk.Frame(form, bg=PANEL)
         inner.pack(fill="x", padx=12, pady=12)
@@ -214,7 +218,7 @@ class ScannerApp:
         for key, title in headings.items():
             self.table.heading(key, text=title, anchor="w")
             self.table.column(key, width=widths[key], stretch=key == "banner", anchor="w")
-        self.table.tag_configure("OPEN", foreground=OPEN)
+        self.table.tag_configure("OPEN", foreground=ACCENT)
         self.table.tag_configure("CLOSED", foreground=CLOSED)
         self.table.tag_configure("TIMEOUT", foreground=TIMEOUT)
         self.table.pack(fill="both", expand=True)
@@ -351,9 +355,6 @@ class ScannerApp:
         self.start_button.config(state="normal")
 
     def _insert_result(self, result: PortScanResult) -> None:
-        response = ""
-        if result.response_time is not None:
-            response = f"{result.response_time * 1000:.1f} ms"
         self.table.insert(
             "",
             "end",
@@ -362,7 +363,7 @@ class ScannerApp:
                 result.state.value,
                 result.protocol,
                 result.service or "",
-                response,
+                result.latency_label() or "",
                 result.banner or "",
             ),
             tags=(result.state.value,),

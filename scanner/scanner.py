@@ -36,40 +36,26 @@ class ScannerError(Exception):
     """Raised when a scan cannot start (for example DNS failure)."""
 
 
-def _connection_refused_codes() -> frozenset[int]:
-    codes = {errno.ECONNREFUSED}
-    if hasattr(errno, "WSAECONNREFUSED"):
-        codes.add(errno.WSAECONNREFUSED)
-    return frozenset(codes)
-
-
-def _timeout_codes() -> frozenset[int]:
-    codes = {errno.ETIMEDOUT}
-    for name in ("WSAETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH"):
+def _errno_set(*names: str) -> frozenset[int]:
+    """Collect errno constants that exist on this platform."""
+    codes: set[int] = set()
+    for name in names:
         value = getattr(errno, name, None)
         if isinstance(value, int):
             codes.add(value)
     return frozenset(codes)
 
 
-def _in_progress_codes() -> frozenset[int]:
-    """connect_ex can return these before the handshake has finished.
-
-    On Windows, settimeout() makes the socket non-blocking internally, so
-    connect_ex often returns WSAEWOULDBLOCK (10035) immediately. That is not
-    a final CLOSED/TIMEOUT verdict; we wait with select() and read SO_ERROR.
-    """
-    codes = {errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EAGAIN}
-    for name in ("WSAEWOULDBLOCK", "WSAEINPROGRESS"):
-        value = getattr(errno, name, None)
-        if isinstance(value, int):
-            codes.add(value)
-    return frozenset(codes)
-
-
-_REFUSED_CODES = _connection_refused_codes()
-_TIMEOUT_CODES = _timeout_codes()
-_IN_PROGRESS_CODES = _in_progress_codes()
+_REFUSED_CODES = _errno_set("ECONNREFUSED", "WSAECONNREFUSED")
+_TIMEOUT_CODES = _errno_set("ETIMEDOUT", "WSAETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH")
+_IN_PROGRESS_CODES = _errno_set(
+    "EINPROGRESS",
+    "EWOULDBLOCK",
+    "EAGAIN",
+    "WSAEWOULDBLOCK",
+    "WSAEINPROGRESS",
+)
+# Windows often returns WSAEWOULDBLOCK (10035) before the handshake finishes.
 
 
 def resolve_ipv4(target: str) -> str:
@@ -112,29 +98,24 @@ def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
         if error_code in _IN_PROGRESS_CODES:
             error_code = _wait_for_connect(sock, timeout)
         state = _state_from_connect_code(error_code)
-        elapsed = time.perf_counter() - started
         banner = grab_banner(sock, timeout) if state is PortState.OPEN else None
         result = PortScanResult(
             port=port,
             state=state,
             error_code=error_code,
-            response_time=elapsed,
+            response_time=time.perf_counter() - started,
             banner=banner,
         )
-        _log_probe_result(result)
-        return result
     except socket.timeout:
         result = _timed_result(port, PortState.TIMEOUT, None, started)
-        _log_probe_result(result)
-        return result
     except OSError as exc:
         code = exc.errno
         state = PortState.CLOSED if code in _REFUSED_CODES else PortState.TIMEOUT
         result = _timed_result(port, state, code, started)
-        _log_probe_result(result)
-        return result
     finally:
         sock.close()
+    _log_probe_result(result)
+    return result
 
 
 def _timed_result(
@@ -152,7 +133,7 @@ def _timed_result(
 
 
 def _wait_for_connect(sock: socket.socket, timeout: float) -> int:
-    """Finish a handshake that connect_ex started but did not complete."""
+    """Wait until a non-blocking connect finishes or the timeout expires."""
     _readable, writable, _errors = select.select([], [sock], [sock], timeout)
     if not writable:
         return getattr(errno, "WSAETIMEDOUT", errno.ETIMEDOUT)
@@ -211,7 +192,6 @@ class TcpConnectScanner:
         )
         duration = time.perf_counter() - started
         results.sort(key=lambda item: item.port)
-        _attach_service_names(results)
 
         report = ScanReport(
             target=cleaned_target,
@@ -257,19 +237,17 @@ def _scan_ports_concurrently(
         ]
         for completed, future in enumerate(as_completed(futures), start=1):
             result = future.result()
-            if result.state is PortState.OPEN:
-                result.service = lookup_service(result.port, result.protocol)
+            _apply_service_hint(result)
             results.append(result)
             if on_progress is not None:
                 on_progress(completed, total, result)
     return results
 
 
-def _attach_service_names(results: list[PortScanResult]) -> None:
-    """Fill the IANA/OS service hint on open ports only."""
-    for result in results:
-        if result.state is PortState.OPEN:
-            result.service = lookup_service(result.port, result.protocol)
+def _apply_service_hint(result: PortScanResult) -> None:
+    """Fill the IANA/OS service name on open ports only."""
+    if result.state is PortState.OPEN:
+        result.service = lookup_service(result.port, result.protocol)
 
 
 def _log_probe_result(result: PortScanResult) -> None:

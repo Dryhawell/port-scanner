@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import socket
 from unittest.mock import MagicMock
 
 import pytest
@@ -72,10 +73,8 @@ def test_resolve_ipv4_uses_getaddrinfo(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_resolve_ipv4_dns_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    import socket as socket_module
-
     def fail(*_args: object, **_kwargs: object) -> list[object]:
-        raise socket_module.gaierror("name failed")
+        raise socket.gaierror("name failed")
 
     monkeypatch.setattr("scanner.scanner.socket.getaddrinfo", fail)
     with pytest.raises(ScannerError, match="Could not resolve hostname"):

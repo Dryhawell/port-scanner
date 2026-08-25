@@ -1,7 +1,4 @@
-"""Yardimci araclar paketi.
-
-JSON/CSV raporlama ve dosya loglama burada durur.
-"""
+"""Helpers that are not part of the scan algorithm: reports and logging."""
 
 from utils.exporter import (
     ExportError,

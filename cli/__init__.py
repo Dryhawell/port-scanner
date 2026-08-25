@@ -1,7 +1,4 @@
-"""Komut satiri arayuzu paketi.
-
-Kullanicidan hedef, port araligi ve timeout alir; tarama scanner paketindedir.
-"""
+"""Command-line interface. Parses arguments and prints results; does not scan."""
 
 from cli.interface import run
 

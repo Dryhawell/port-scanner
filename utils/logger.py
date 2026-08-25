@@ -26,10 +26,10 @@ def get_logger() -> logging.Logger:
 
 
 def setup_logging(*, verbose: bool = False, log_file: Path | None = None) -> logging.Logger:
-    """Configure a file handler plus a console handler.
+    """Configure file logging, and optional DEBUG output on the console.
 
-    The file always stores DEBUG and above. The console is INFO by default,
-    or DEBUG when verbose is True.
+    The log file always stores DEBUG and above. The console stays quiet unless
+    verbose is True.
     """
     logger = get_logger()
     logger.setLevel(logging.DEBUG)

@@ -7,6 +7,7 @@ itself; scanning stays in the scanner package.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -106,8 +107,9 @@ def format_result(result: PortScanResult) -> str:
     parts = [prefix, str(result.port), result.state.value]
     if result.service:
         parts.append(result.service)
-    if result.response_time is not None:
-        parts.append(f"{result.response_time * 1000:.1f}ms")
+    latency = result.latency_label()
+    if latency:
+        parts.append(latency)
     if result.banner:
         parts.append(result.banner)
     return " ".join(parts)
@@ -137,8 +139,7 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
         return
 
     for result in visible:
-        if show_closed or result.state is PortState.OPEN:
-            print(format_result(result))
+        print(format_result(result))
 
     print()
     print(f"Found: {open_count} open port(s)")
@@ -161,9 +162,7 @@ def run(argv: list[str] | None = None) -> int:
         target = validate_target(args.target)
         start_port, end_port = parse_port_range(args.ports)
     except ValidationError as exc:
-        logger.error("%s", exc)
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        return _cli_error(logger, exc)
 
     print("Use this tool only on systems you are authorized to test.")
     print(f"Scanning {target}...")
@@ -177,13 +176,9 @@ def run(argv: list[str] | None = None) -> int:
             args.threads,
         )
     except ValidationError as exc:
-        logger.error("%s", exc)
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        return _cli_error(logger, exc)
     except ScannerError as exc:
-        logger.error("%s", exc)
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        return _cli_error(logger, exc)
     except KeyboardInterrupt:
         logger.warning("Scan interrupted.")
         print("\nScan interrupted.", file=sys.stderr)
@@ -194,9 +189,7 @@ def run(argv: list[str] | None = None) -> int:
     try:
         saved = _maybe_export(report, args.output, args.format)
     except ExportError as exc:
-        logger.error("%s", exc)
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        return _cli_error(logger, exc)
 
     if saved is not None:
         print(f"Report saved: {saved}")
@@ -224,3 +217,9 @@ def _resolve_format(output: str | None, fmt: str | None) -> ExportFormat:
         if inferred is not None:
             return inferred
     return ExportFormat.JSON
+
+
+def _cli_error(logger: logging.Logger, exc: BaseException) -> int:
+    logger.error("%s", exc)
+    print(f"Error: {exc}", file=sys.stderr)
+    return 1

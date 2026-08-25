@@ -26,6 +26,12 @@ class PortScanResult:
     timestamp: datetime = field(default_factory=_utc_now)
     error_code: int | None = None
 
+    def latency_label(self) -> str | None:
+        """Return a compact millisecond label, or None if not measured."""
+        if self.response_time is None:
+            return None
+        return f"{self.response_time * 1000:.1f}ms"
+
 
 @dataclass(slots=True)
 class ScanReport:
