@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "examples:\n"
+            "  python main.py --gui\n"
             "  python main.py --target 127.0.0.1 --ports 1-1000\n"
             "  python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5\n"
             "  python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json\n"
@@ -51,16 +52,19 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Open the Tkinter interface instead of running a CLI scan",
+    )
+    parser.add_argument(
         "--target",
         "-t",
-        required=True,
-        help="IPv4 address or hostname to scan",
+        help="IPv4 address or hostname to scan (required for CLI)",
     )
     parser.add_argument(
         "--ports",
         "-p",
-        required=True,
-        help="Single port or inclusive range, e.g. 80 or 1-1000",
+        help="Single port or inclusive range, e.g. 80 or 1-1000 (required for CLI)",
     )
     parser.add_argument(
         "--timeout",
@@ -143,6 +147,14 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
 def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.gui:
+        from gui.app import run_app
+
+        return run_app()
+
+    if not args.target or not args.ports:
+        parser.error("--target and --ports are required unless --gui is used")
+
     logger = setup_logging(verbose=args.verbose)
 
     try:

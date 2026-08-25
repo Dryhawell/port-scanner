@@ -1,5 +1,8 @@
 """Grafik arayuz paketi.
 
-Tkinter tabanli arayuz, ayni scanner paketini kullanacak.
-PHASE 1'de henuz GUI yoktur.
+Tkinter penceresi ayni TcpConnectScanner motorunu kullanir.
 """
+
+from gui.app import run_app
+
+__all__ = ["run_app"]
