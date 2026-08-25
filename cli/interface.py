@@ -11,7 +11,13 @@ import logging
 import sys
 from pathlib import Path
 
-from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT, MAX_WORKERS
+from scanner.constants import (
+    APP_NAME,
+    APP_VERSION,
+    DEFAULT_MAX_WORKERS,
+    DEFAULT_TIMEOUT,
+    MAX_WORKERS,
+)
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
@@ -51,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Too many threads can slow this machine and inflate timeouts."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"{APP_NAME} {APP_VERSION}",
     )
     parser.add_argument(
         "--gui",

@@ -12,6 +12,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from scanner.constants import APP_NAME, APP_VERSION
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from utils.logger import get_logger
@@ -35,7 +36,8 @@ def report_to_dict(report: ScanReport) -> dict[str, object]:
     """Serialize a scan into a stable JSON-friendly dictionary."""
     open_ports = [item.port for item in report.open_results]
     return {
-        "tool": "port-scanner",
+        "tool": APP_NAME,
+        "version": APP_VERSION,
         "scan_method": "tcp_connect",
         "target": report.target,
         "resolved_ip": report.resolved_ip,

@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
-from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
+from scanner.constants import APP_VERSION, DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
@@ -48,7 +48,7 @@ class ScannerApp:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Port Scanner")
+        self.root.title(f"Port Scanner {APP_VERSION}")
         self.root.geometry("980x640")
         self.root.minsize(820, 520)
         self.root.configure(bg=BG)

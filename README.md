@@ -1,6 +1,6 @@
 # Port Scanner
 
-An educational TCP connect scanner for **authorized** hosts. It probes a port range on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
+Version **1.0.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -53,6 +53,7 @@ python -m pip install -r requirements.txt
 
 ```powershell
 python main.py --help
+python main.py --version
 python main.py --gui
 python main.py --target 127.0.0.1 --ports 1-1000
 ```
