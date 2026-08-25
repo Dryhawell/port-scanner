@@ -11,6 +11,7 @@ import select
 import socket
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 from scanner.banner import grab_banner
 from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
@@ -174,6 +175,7 @@ class TcpConnectScanner:
 
         port_count = end - start + 1
         workers = min(requested_workers, port_count)
+        started_at = datetime.now(timezone.utc)
         started = time.perf_counter()
         results = _scan_ports_concurrently(
             resolved_ip,
@@ -195,6 +197,7 @@ class TcpConnectScanner:
             results=results,
             max_workers=workers,
             duration=duration,
+            started_at=started_at,
         )
 
 

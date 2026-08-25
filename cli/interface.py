@@ -8,12 +8,20 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT, MAX_WORKERS
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import ValidationError, parse_port_range, validate_target
+from utils.exporter import (
+    ExportError,
+    ExportFormat,
+    default_output_path,
+    export_report,
+    infer_format,
+)
 
 _STATE_PREFIX = {
     PortState.OPEN: "[+]",
@@ -33,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
             "examples:\n"
             "  python main.py --target 127.0.0.1 --ports 1-1000\n"
             "  python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5\n"
+            "  python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json\n"
+            "  python main.py --target 127.0.0.1 --ports 22 --format csv\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -65,6 +75,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-closed",
         action="store_true",
         help="Print CLOSED and TIMEOUT ports as well as OPEN ports",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        help="Report file path. Defaults to reports/scan_<timestamp>.<format> when --format is set",
+    )
+    parser.add_argument(
+        "--format",
+        "-f",
+        choices=[item.value for item in ExportFormat],
+        help="Report format: json or csv (default: json when exporting)",
     )
     return parser
 
@@ -145,4 +166,36 @@ def run(argv: list[str] | None = None) -> int:
         return 130
 
     print_report(report, show_closed=args.show_closed)
+
+    try:
+        saved = _maybe_export(report, args.output, args.format)
+    except ExportError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if saved is not None:
+        print(f"Report saved: {saved}")
     return 0
+
+
+def _maybe_export(
+    report: ScanReport,
+    output: str | None,
+    fmt: str | None,
+) -> Path | None:
+    if output is None and fmt is None:
+        return None
+
+    format_name = _resolve_format(output, fmt)
+    path = Path(output) if output else default_output_path(format_name)
+    return export_report(report, path, format_name)
+
+
+def _resolve_format(output: str | None, fmt: str | None) -> ExportFormat:
+    if fmt:
+        return ExportFormat(fmt)
+    if output:
+        inferred = infer_format(output)
+        if inferred is not None:
+            return inferred
+    return ExportFormat.JSON

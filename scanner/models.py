@@ -39,6 +39,7 @@ class ScanReport:
     results: list[PortScanResult]
     max_workers: int = 1
     duration: float | None = None
+    started_at: datetime = field(default_factory=_utc_now)
 
     @property
     def open_results(self) -> list[PortScanResult]:
