@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.0.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
+Version **1.1.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -19,7 +19,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Service-name hint with `socket.getservbyport()` (IANA/OS table, not proof of the app)
 - Passive banner grab (read only; no HTTP/SMTP probes)
 - Per-port latency with `time.perf_counter()`
-- CLI (`argparse`) and dark-themed Tkinter GUI
+- CLI (`argparse`) with a live progress bar, plus a dark-themed Tkinter GUI
 - JSON and CSV reports under `reports/`
 - File logging to `logs/scanner.log`
 - Unit tests that mock sockets and DNS (no internet required)
@@ -70,7 +70,7 @@ python main.py --target 127.0.0.1 --ports 1-1000
 | `--verbose` / `-v` | DEBUG lines on the console |
 | `--gui` | Open the Tkinter UI |
 
-Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. They are still stored in reports.
+Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. They are still stored in reports. During a CLI scan, stderr shows a live ASCII progress bar (`Progress: [########........]  50%  Found: N open ports`). `--verbose` skips the bar so DEBUG lines stay readable.
 
 ## CLI Examples
 

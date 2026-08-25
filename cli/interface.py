@@ -17,6 +17,7 @@ from scanner.constants import (
     DEFAULT_MAX_WORKERS,
     DEFAULT_TIMEOUT,
     MAX_WORKERS,
+    PROGRESS_BAR_WIDTH,
 )
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
@@ -156,6 +157,24 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
     print(f"Found: {open_count} open port(s)")
 
 
+def render_progress_bar(completed: int, total: int, width: int = PROGRESS_BAR_WIDTH) -> str:
+    """Return a single-line ASCII progress bar, e.g. [########........]  50%."""
+    if total <= 0:
+        filled = width
+        percent = 100
+    else:
+        ratio = min(max(completed / total, 0.0), 1.0)
+        filled = min(width, int(round(ratio * width)))
+        percent = int(round(ratio * 100))
+    return f"[{'#' * filled}{'.' * (width - filled)}] {percent:3d}%"
+
+
+def _print_progress(completed: int, total: int, open_count: int) -> None:
+    bar = render_progress_bar(completed, total)
+    line = f"\rProgress: {bar}  Found: {open_count} open ports"
+    print(line, end="", file=sys.stderr, flush=True)
+
+
 def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -177,6 +196,16 @@ def run(argv: list[str] | None = None) -> int:
 
     print("Use this tool only on systems you are authorized to test.")
     print(f"Scanning {target}...")
+    sys.stdout.flush()
+
+    open_found = 0
+
+    def on_progress(completed: int, total: int, result: PortScanResult) -> None:
+        nonlocal open_found
+        if result.state is PortState.OPEN:
+            open_found += 1
+        if not args.verbose:
+            _print_progress(completed, total, open_found)
 
     try:
         report = TcpConnectScanner().scan(
@@ -185,16 +214,21 @@ def run(argv: list[str] | None = None) -> int:
             end_port,
             args.timeout,
             args.threads,
+            on_progress=on_progress,
         )
     except ValidationError as exc:
+        _end_progress_line(args.verbose)
         return _cli_error(logger, exc)
     except ScannerError as exc:
+        _end_progress_line(args.verbose)
         return _cli_error(logger, exc)
     except KeyboardInterrupt:
+        _end_progress_line(args.verbose)
         logger.warning("Scan interrupted.")
-        print("\nScan interrupted.", file=sys.stderr)
+        print("Scan interrupted.", file=sys.stderr)
         return 130
 
+    _end_progress_line(args.verbose)
     print_report(report, show_closed=args.show_closed)
 
     try:
@@ -228,6 +262,11 @@ def _resolve_format(output: str | None, fmt: str | None) -> ExportFormat:
         if inferred is not None:
             return inferred
     return ExportFormat.JSON
+
+
+def _end_progress_line(verbose: bool) -> None:
+    if not verbose:
+        print(file=sys.stderr)
 
 
 def _cli_error(logger: logging.Logger, exc: BaseException) -> int:

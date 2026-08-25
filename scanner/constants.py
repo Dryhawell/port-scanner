@@ -7,7 +7,7 @@ Port ranges below are conventional IANA groupings, not proof of a service:
 """
 
 APP_NAME = "port-scanner"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 MIN_PORT = 1
 MAX_PORT = 65535
@@ -18,6 +18,7 @@ PROTOCOL_TCP = "tcp"
 DEFAULT_BANNER_TIMEOUT = 0.3
 MAX_BANNER_BYTES = 1024
 MAX_BANNER_CHARS = 200
+PROGRESS_BAR_WIDTH = 16
 
 WELL_KNOWN_PORT_MAX = 1023
 REGISTERED_PORT_MAX = 49151
