@@ -145,7 +145,10 @@ def test_scan_records_history_unless_disabled(
     monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
     assert run(["--target", "127.0.0.1", "--ports", "80"]) == 0
     assert len(recorded) == 1
-    assert "History recorded: #9" in capsys.readouterr().out
+    recorded_out = capsys.readouterr().out
+    assert "History recorded: #9" in recorded_out
+    assert "OPEN" in recorded_out
+    assert "[" in recorded_out
     recorded.clear()
     assert run(["--target", "127.0.0.1", "--ports", "80", "--no-history"]) == 0
     assert recorded == []
@@ -203,6 +206,7 @@ def test_history_list_and_show(
     listed = capsys.readouterr().out
     assert "tcp_connect" in listed
     assert "127.0.0.1" in listed
+    assert "Hits over stored runs" in listed
     assert run(["--history-id", str(scan_id)]) == 0
     shown = capsys.readouterr().out
     assert "OPEN" in shown

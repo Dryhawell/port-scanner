@@ -47,6 +47,7 @@ from scanner.validator import (
     validate_runs,
     validate_target,
 )
+from utils.charts import bars_ascii, bars_from_report, trend_ascii
 from utils.exporter import (
     ExportError,
     ExportFormat,
@@ -251,6 +252,8 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
         f"(open={open_count}, closed={closed_count}, timeout={timeout_count})"
     )
     print()
+    print(bars_ascii(bars_from_report(report)))
+    print()
 
     visible = report.results if show_closed else report.open_results
     if not visible:
@@ -285,6 +288,8 @@ def print_discovery_report(report: DiscoveryReport, *, show_closed: bool = False
     if report.duration is not None:
         print(f"Duration: {report.duration:.2f}s")
     print(f"Hosts:  {len(report.results)} (up={up_count}, down={down_count})")
+    print()
+    print(bars_ascii(bars_from_report(report)))
     print()
 
     visible = report.results if show_closed else report.up_results
@@ -655,6 +660,10 @@ def _print_history_list(rows: list[ScanSummary], *, target: str | None) -> None:
             f"{item.id:>4}  {stamp:<19}  {item.method:<12}  "
             f"{item.target:<22}  {result}"
         )
+    print()
+    chronological = list(reversed(rows))
+    print("Hits over stored runs (oldest → newest; open ports or live hosts):")
+    print(trend_ascii([item.hits for item in chronological]))
     print()
     print("Use --history-id ID to print a run, --history-diff OLD NEW to compare.")
 

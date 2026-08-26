@@ -59,6 +59,8 @@ def test_report_to_html_includes_summary() -> None:
     assert "OPEN" in document
     assert "CLOSED" in document
     assert "tcp_connect" in document
+    assert "<svg" in document
+    assert 'xmlns="http://www.w3.org/2000/svg"' in document
 
 
 def test_report_to_html_escapes_banner() -> None:
@@ -122,6 +124,7 @@ def test_export_discovery_html(tmp_path: Path) -> None:
     assert "192.168.1.1" in text
     assert 'class="UP"' in text
     assert 'class="DOWN"' in text
+    assert "<svg" in text
 
 
 def test_path_for_run_suffix() -> None:

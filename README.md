@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.11.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, and a parsed passive banner. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`).
+Version **1.12.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, and a parsed passive banner. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`). Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -26,6 +26,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Scheduled repeats in this process (`--interval` 5–86400s, `--runs` or Ctrl+C), with a diff of newly open / gone ports
 - JSON, CSV, HTML, and simple PDF reports under `reports/`
 - Local sqlite scan history (`reports/history.db`) with list / show / diff
+- Result-count charts: ASCII on the CLI, SVG in HTML reports, Tkinter canvas in the GUI
 - File logging to `logs/scanner.log`
 - Unit tests that mock sockets and DNS (no internet required)
 
@@ -40,6 +41,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 | GUI | Tkinter / `ttk` |
 | Reports | `json`, `csv`, HTML, PDF (stdlib writer) |
 | History | `sqlite3` (`reports/history.db`) |
+| Charts | ASCII / SVG / Tkinter `Canvas` (stdlib) |
 | Logging | `logging` |
 | Tests | `pytest` |
 
@@ -132,7 +134,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE REPORT** writes HTML or PDF (the file extension chooses the format). **HISTORY** lists stored runs from `reports/history.db`; double-click or **LOAD** to show one in the table. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
+Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE REPORT** writes HTML or PDF (the file extension chooses the format). **HISTORY** lists stored runs from `reports/history.db`; double-click or **LOAD** to show one in the table. A bar chart under the progress bar shows OPEN / CLOSED / TIMEOUT (or UP / DOWN); the history window charts hits across stored runs. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -148,6 +150,10 @@ Timeout: 0.5s
 Threads: 50
 Duration: 1.25s
 Scanned: 1000 ports (open=3, closed=0, timeout=997)
+
+OPEN         3  [....................]
+CLOSED       0  [....................]
+TIMEOUT    997  [####################]
 
 [+] 22 OPEN ssh OpenSSH 9.2 12.3ms SSH-2.0-OpenSSH_9.2
 [+] 80 OPEN http 4.1ms
@@ -196,6 +202,7 @@ utils/
   exporter.py           JSON / CSV / HTML / PDF
   pdf.py                stdlib PDF 1.4 writer (Helvetica / Courier)
   history.py            sqlite scan history (reports/history.db)
+  charts.py             ASCII / SVG bar charts from result counts
   logger.py             logs/scanner.log
 tests/                  pytest
 reports/                generated reports and history.db (gitignored)
@@ -211,7 +218,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner` or `disc
 3. Probe each host (TCP ping) or each port concurrently (TCP connect or UDP datagram, bounded thread pool).
 4. Map the outcome to UP / DOWN, or OPEN / CLOSED / TIMEOUT.
 5. For OPEN TCP ports, look up a service name (OS table, then fallback map). If the peer speaks first, classify that greeting (ASCII or a few binary signatures). UDP OPEN ports get a table/fallback name if known; there is no TCP-style banner parse. Discovery does not grab banners.
-6. Sort results and print, export (JSON, CSV, HTML, or PDF), or show in the GUI.
+6. Sort results and print, export (JSON, CSV, HTML, or PDF), or show in the GUI. HTML includes an SVG count chart; the CLI prints ASCII bars.
 7. Record the run in `reports/history.db` unless `--no-history` is set.
 8. If `--interval` is set, wait and repeat. After the second run, print ports (or hosts) that appeared or disappeared.
 
@@ -249,6 +256,18 @@ python main.py --target 127.0.0.1 --profile quick --no-history
 `--history-diff OLD NEW` treats the first id as the baseline and reuses the same open-port / live-host diff as `--interval`. You cannot compare a port scan with a discovery run. The GUI **HISTORY** button lists recent rows; **LOAD** (or double-click) shows one in the results table without writing a duplicate row.
 
 The database is gitignored. It can hold IP addresses, port numbers, and banners from systems you scanned — keep it on a machine you control.
+
+## Visualization
+
+Counts are drawn with the **standard library only**. There is no matplotlib, no Chart.js, and no network call to render a graph.
+
+- **CLI** — after the summary, a three-line (or two-line for discovery) ASCII bar chart. `--history` also prints a column chart of hits across stored runs (oldest on the left).
+- **HTML** — an inline SVG next to the summary cards. Open the file in a browser; no extra assets.
+- **GUI** — a Tkinter `Canvas` under the progress bar. The **HISTORY** window charts hits per stored run.
+
+Bar length is relative to the largest count in that chart, not to 65535. A full TIMEOUT bar on a 1000-port scan means “almost everything timed out”, not “the host is 100% filtered”. This is a count picture, not a vulnerability score and not a network map.
+
+PDF reports stay text-only.
 
 ## TCP Connect Scanning
 
@@ -339,7 +358,7 @@ python -m pip install -r requirements.txt
 python -m pytest
 ```
 
-Tests cover validation, connect-code mapping, mocked TCP/UDP probes, mocked DNS, TCP ping discovery, service lookup (including the fallback map), banner parsing, and sqlite history round-trips. They do not scan the public internet.
+Tests cover validation, connect-code mapping, mocked TCP/UDP probes, mocked DNS, TCP ping discovery, service lookup (including the fallback map), banner parsing, sqlite history round-trips, and ASCII/SVG charts. They do not scan the public internet.
 
 ## Limitations
 
@@ -357,6 +376,7 @@ Tests cover validation, connect-code mapping, mocked TCP/UDP probes, mocked DNS,
 - TIMEOUT vs CLOSED depends on the OS and firewall
 - Repeats run in the foreground; this is not a system scheduler or a persistence mechanism
 - Scan history is a local sqlite file, not an alerting platform or a remote archive
+- Charts scale to the largest count in that picture; they are not a risk score or a network map
 - PDF uses built-in Helvetica/Courier only; it is not a full print layout engine
 
 ## Authorized Use
@@ -375,7 +395,6 @@ Logs and reports may contain IP addresses, port numbers, and banners. Do not log
 
 ## Future Improvements
 
-- Visualization
 - Optional vulnerability-information lookup (reference data only)
 
 ## License

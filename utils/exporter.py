@@ -1,8 +1,9 @@
 """Export scan reports to JSON, CSV, HTML, or PDF.
 
 Generated files go under reports/ by default and are gitignored.
-JSON is for other tools; HTML is a self-contained page you can open in a browser.
-PDF is a simple stdlib-built document (Helvetica/Courier, no images).
+JSON is for other tools; HTML is a self-contained page you can open in a browser,
+with a small SVG bar chart of result counts. PDF is a simple stdlib-built
+document (Helvetica/Courier, no images).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from pathlib import Path
 from scanner.constants import APP_NAME, APP_VERSION
 from scanner.models import DiscoveryReport, HostDiscoveryResult, HostState, PortScanResult, ScanReport
 from scanner.port import PortState
+from utils.charts import bars_from_report, bars_svg
 from utils.logger import get_logger
 from utils.pdf import build_pdf
 
@@ -252,6 +254,7 @@ def _discovery_to_html(report: DiscoveryReport) -> str:
         f"<div class=\"stat open\"><span>Up</span><strong>{up_count}</strong></div>\n"
         f"<div class=\"stat closed\"><span>Down</span><strong>{down_count}</strong></div>\n"
         "</section>\n"
+        f"<section class=\"chart\">{bars_svg(bars_from_report(report))}</section>\n"
         "<table>\n"
         "<thead><tr><th>Host</th><th>State</th><th>Evidence</th><th>Response</th></tr></thead>\n"
         f"<tbody>\n{rows}\n</tbody>\n"
@@ -320,6 +323,7 @@ def report_to_html(report: ScanReport) -> str:
         f"<div class=\"stat closed\"><span>Closed</span><strong>{closed_count}</strong></div>\n"
         f"<div class=\"stat timeout\"><span>Timeout</span><strong>{timeout_count}</strong></div>\n"
         "</section>\n"
+        f"<section class=\"chart\">{bars_svg(bars_from_report(report))}</section>\n"
         "<table>\n"
         "<thead><tr>"
         "<th>Port</th><th>State</th><th>Protocol</th>"
@@ -462,6 +466,8 @@ h1{font:600 28px Consolas,ui-monospace,monospace;margin:0 0 16px}
 .stat.open strong{color:#3fb950}
 .stat.closed strong{color:#f85149}
 .stat.timeout strong{color:#d29922}
+.chart{margin:0 0 18px;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 14px}
+.chart svg{display:block}
 table{width:100%;border-collapse:collapse;background:#161b22;border:1px solid #30363d}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #30363d;font:13px Consolas,ui-monospace,monospace}
 th{color:#8b949e;font-size:11px;text-transform:uppercase}

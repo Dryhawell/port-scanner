@@ -33,8 +33,16 @@ from scanner.models import (
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import ValidationError, validate_interval, validate_runs
+from utils.charts import (
+    BarSpec,
+    COLOR_TRACK,
+    bars_from_report,
+    empty_discovery_bars,
+    empty_port_bars,
+    scale_lengths,
+)
 from utils.exporter import ExportError, ExportFormat, export_report, infer_format
-from utils.history import HistoryError, ScanHistory, record_report
+from utils.history import HistoryError, ScanHistory, ScanSummary, record_report
 from utils.logger import get_logger, setup_logging
 
 logger = get_logger()
@@ -68,8 +76,8 @@ class ScannerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(f"Port Scanner {APP_VERSION}")
-        self.root.geometry("1040x640")
-        self.root.minsize(820, 520)
+        self.root.geometry("1040x720")
+        self.root.minsize(820, 580)
         self.root.configure(bg=BG)
         self._scanner = TcpConnectScanner()
         self._events: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -77,6 +85,7 @@ class ScannerApp:
         self._open_seen = 0
         self._delta_note: str | None = None
         self._last_report: ScanReport | DiscoveryReport | None = None
+        self._chart_bars: tuple[BarSpec, ...] = empty_port_bars()
         self._build_style()
         self._build_layout()
 
@@ -259,6 +268,22 @@ class ScannerApp:
         )
         self.progress.pack(fill="x", padx=16, pady=8)
 
+        chart_frame = tk.Frame(
+            self.root,
+            bg=PANEL,
+            highlightbackground="#30363d",
+            highlightthickness=1,
+        )
+        chart_frame.pack(fill="x", padx=16, pady=(0, 8))
+        self._chart_canvas = tk.Canvas(
+            chart_frame,
+            bg=PANEL,
+            highlightthickness=0,
+            height=84,
+        )
+        self._chart_canvas.pack(fill="x", padx=8, pady=6)
+        self._chart_canvas.bind("<Configure>", lambda _event: self._redraw_chart())
+
         table_frame = tk.Frame(self.root, bg=BG)
         table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 16))
         heading_row = tk.Frame(table_frame, bg=BG)
@@ -437,6 +462,7 @@ class ScannerApp:
         self._last_report = None
         self.save_button.config(state="disabled")
         self.progress["value"] = 0
+        self._set_chart_bars(empty_discovery_bars() if discover else empty_port_bars())
         self.open_count_var.set("Live hosts: 0" if discover else "Open ports: 0")
         self.status_var.set("Discovering..." if discover else "Scanning...")
         self.start_button.config(state="disabled")
@@ -661,6 +687,7 @@ class ScannerApp:
         self.save_button.config(state="normal")
         if finished:
             self.start_button.config(state="normal")
+        self._set_chart_bars(bars_from_report(report))
 
     def _show_discovery_report(
         self,
@@ -689,6 +716,7 @@ class ScannerApp:
         self.save_button.config(state="normal")
         if finished:
             self.start_button.config(state="normal")
+        self._set_chart_bars(bars_from_report(report))
 
     def save_html_report(self) -> None:
         if self._last_report is None:
@@ -730,7 +758,7 @@ class ScannerApp:
         window = tk.Toplevel(self.root)
         window.title("Scan history")
         window.configure(bg=BG)
-        window.geometry("760x420")
+        window.geometry("760x520")
         window.transient(self.root)
         tk.Label(
             window,
@@ -739,6 +767,16 @@ class ScannerApp:
             fg=MUTED,
             font=("Segoe UI", 9),
         ).pack(anchor="w", padx=12, pady=(12, 6))
+        tk.Label(
+            window,
+            text="Hits over stored runs (oldest → newest; open ports or live hosts)",
+            bg=BG,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+        ).pack(anchor="w", padx=12)
+        trend = tk.Canvas(window, bg=PANEL, highlightthickness=0, height=88)
+        trend.pack(fill="x", padx=12, pady=(4, 8))
+        self._draw_history_trend(trend, rows)
         table_frame = tk.Frame(window, bg=BG)
         table_frame.pack(fill="both", expand=True, padx=12)
         scroll = ttk.Scrollbar(table_frame)
@@ -826,6 +864,113 @@ class ScannerApp:
             self._show_report(report, record=False)
         self.status_var.set(f"{self.status_var.get()}  |  loaded #{scan_id}")
 
+    def _set_chart_bars(self, bars: tuple[BarSpec, ...]) -> None:
+        self._chart_bars = bars
+        self._redraw_chart()
+
+    def _redraw_chart(self) -> None:
+        canvas = self._chart_canvas
+        canvas.delete("all")
+        bars = self._chart_bars or empty_port_bars()
+        width = max(int(canvas.winfo_width()), 240)
+        height = int(canvas.winfo_height()) or 84
+        label_x = 8
+        plot_x = 78
+        value_x = width - 8
+        plot_width = max(width - plot_x - 48, 40)
+        row_h = height / max(len(bars), 1)
+        fills = scale_lengths([bar.value for bar in bars], plot_width)
+        for index, (bar, filled) in enumerate(zip(bars, fills, strict=True)):
+            y = index * row_h
+            track_y = y + row_h * 0.38
+            track_h = max(row_h * 0.28, 8)
+            canvas.create_text(
+                label_x,
+                y + row_h / 2,
+                text=bar.label,
+                anchor="w",
+                fill=MUTED,
+                font=("Consolas", 9),
+            )
+            canvas.create_rectangle(
+                plot_x,
+                track_y,
+                plot_x + plot_width,
+                track_y + track_h,
+                fill=COLOR_TRACK,
+                outline="",
+            )
+            if filled > 0:
+                canvas.create_rectangle(
+                    plot_x,
+                    track_y,
+                    plot_x + filled,
+                    track_y + track_h,
+                    fill=bar.color,
+                    outline="",
+                )
+            canvas.create_text(
+                value_x,
+                y + row_h / 2,
+                text=str(bar.value),
+                anchor="e",
+                fill=FG,
+                font=("Consolas", 9),
+            )
+
+    def _draw_history_trend(self, canvas: tk.Canvas, rows: list[ScanSummary]) -> None:
+        canvas.delete("all")
+        if not rows:
+            canvas.create_text(
+                12,
+                44,
+                text="No stored scans yet.",
+                anchor="w",
+                fill=MUTED,
+                font=("Segoe UI", 10),
+            )
+            return
+
+        def paint(_event: object | None = None) -> None:
+            canvas.delete("all")
+            width = max(int(canvas.winfo_width()), 200)
+            height = max(int(canvas.winfo_height()), 72)
+            chronological = list(reversed(rows))
+            values = [item.hits for item in chronological]
+            plot_left = 16
+            plot_right = width - 16
+            plot_top = 10
+            plot_bottom = height - 18
+            plot_height = max(plot_bottom - plot_top, 10)
+            plot_width = max(plot_right - plot_left, 10)
+            gap = 4
+            bar_w = max((plot_width / len(values)) - gap, 2)
+            heights = scale_lengths(values, plot_height)
+            peak = max(values)
+            for index, (item, bar_h) in enumerate(zip(chronological, heights, strict=True)):
+                x = plot_left + index * (bar_w + gap)
+                y = plot_bottom - bar_h
+                color = ACCENT if item.kind != "discovery" else TIMEOUT
+                canvas.create_rectangle(
+                    x,
+                    y if bar_h else plot_bottom - 2,
+                    x + bar_w,
+                    plot_bottom,
+                    fill=color,
+                    outline="",
+                )
+            canvas.create_text(
+                plot_left,
+                height - 6,
+                text=f"n={len(values)}  peak={peak}",
+                anchor="w",
+                fill=MUTED,
+                font=("Consolas", 8),
+            )
+
+        canvas.bind("<Configure>", paint)
+        canvas.after(1, paint)
+
     def _insert_result(self, result: PortScanResult) -> None:
         self.table.insert(
             "",
@@ -861,6 +1006,7 @@ class ScannerApp:
         self._last_report = None
         self.save_button.config(state="disabled")
         self.start_button.config(state="normal")
+        self._set_chart_bars(empty_port_bars())
 
     def _clear_table(self) -> None:
         for row_id in self.table.get_children():
