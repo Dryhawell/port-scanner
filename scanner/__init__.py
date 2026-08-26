@@ -1,6 +1,12 @@
 """TCP connect scan engine: validation, probing, discovery, service hints, and banners."""
 
-from scanner.banner import BannerHint, grab_banner, parse_banner, sanitize_banner
+from scanner.banner import (
+    BannerHint,
+    classify_banner,
+    grab_banner,
+    parse_banner,
+    sanitize_banner,
+)
 from scanner.discover import discover_hosts, probe_host
 from scanner.models import (
     DiscoveryReport,
@@ -44,6 +50,7 @@ __all__ = [
     "ScannerError",
     "TcpConnectScanner",
     "ValidationError",
+    "classify_banner",
     "discover_hosts",
     "grab_banner",
     "lookup_service",

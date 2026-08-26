@@ -30,3 +30,17 @@ def test_lookup_unknown_port(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("scanner.service.socket.getservbyport", fake_getservbyport)
     assert lookup_service(54321) is None
+    assert lookup_service(6379) == "redis"
+    assert lookup_service(5432) == "postgresql"
+    assert lookup_service(27017) == "mongodb"
+    assert lookup_service(5353, "udp") == "mdns"
+
+
+def test_lookup_os_table_wins_over_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_getservbyport(port: int, _protocol: str) -> str:
+        if port == 6379:
+            return "custom-redis"
+        raise OSError("not found")
+
+    monkeypatch.setattr("scanner.service.socket.getservbyport", fake_getservbyport)
+    assert lookup_service(6379) == "custom-redis"

@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from datetime import datetime, timezone
 
-from scanner.banner import grab_banner, parse_banner, sanitize_banner
+from scanner.banner import classify_banner, recv_banner, sanitize_banner, visible_banner
 from scanner.constants import (
     DEFAULT_MAX_WORKERS,
     DEFAULT_TIMEOUT,
@@ -166,18 +166,18 @@ def probe_tcp_port(
         if error_code in _IN_PROGRESS_CODES:
             error_code = _wait_for_connect(sock, timeout)
         state = _state_from_connect_code(error_code)
-        banner = (
-            grab_banner(sock, timeout)
+        raw = (
+            recv_banner(sock, timeout)
             if with_banner and state is PortState.OPEN
             else None
         )
-        hint = parse_banner(banner)
+        hint = classify_banner(raw)
         result = PortScanResult(
             port=port,
             state=state,
             error_code=error_code,
             response_time=time.perf_counter() - started,
-            banner=banner,
+            banner=visible_banner(raw, hint),
             banner_kind=hint.kind,
             banner_product=hint.product,
             banner_version=hint.version,
@@ -435,10 +435,10 @@ def _scan_ports_concurrently(
 
 
 def _apply_service_hint(result: PortScanResult) -> None:
-    """Fill the IANA/OS service name on open ports only.
+    """Fill a service name on open ports only.
 
-    If the services table has no name, reuse the banner kind (ssh, ftp, …).
-    A table name is never overwritten: a mismatch with the banner is useful.
+    Order: OS services table, then the built-in fallback map, then banner kind.
+    A table/fallback name is never overwritten: a mismatch with the banner is useful.
     """
     if result.state is not PortState.OPEN:
         return

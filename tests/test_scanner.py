@@ -38,7 +38,7 @@ def test_probe_open_with_mock_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     sock = MagicMock()
     sock.connect_ex.return_value = 0
     monkeypatch.setattr("scanner.scanner.socket.socket", lambda *args, **kwargs: sock)
-    monkeypatch.setattr("scanner.scanner.grab_banner", lambda _sock, _timeout: "SSH-2.0-OpenSSH_9.2")
+    monkeypatch.setattr("scanner.scanner.recv_banner", lambda _sock, _timeout: b"SSH-2.0-OpenSSH_9.2")
 
     result = probe_tcp_port("127.0.0.1", 22, 0.5)
     assert result.state is PortState.OPEN
@@ -55,14 +55,14 @@ def test_probe_open_with_mock_socket(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_probe_skips_banner_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     sock = MagicMock()
     sock.connect_ex.return_value = 0
-    grab = MagicMock(return_value="SSH-2.0-OpenSSH_9.2")
+    recv = MagicMock(return_value=b"SSH-2.0-OpenSSH_9.2")
     monkeypatch.setattr("scanner.scanner.socket.socket", lambda *args, **kwargs: sock)
-    monkeypatch.setattr("scanner.scanner.grab_banner", grab)
+    monkeypatch.setattr("scanner.scanner.recv_banner", recv)
 
     result = probe_tcp_port("127.0.0.1", 22, 0.5, with_banner=False)
     assert result.state is PortState.OPEN
     assert result.banner is None
-    grab.assert_not_called()
+    recv.assert_not_called()
 
 
 def test_probe_closed_with_mock_socket(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,7 +143,7 @@ def test_probe_ipv6_uses_inet6_tuple(monkeypatch: pytest.MonkeyPatch) -> None:
         return sock
 
     monkeypatch.setattr("scanner.scanner.socket.socket", fake_socket)
-    monkeypatch.setattr("scanner.scanner.grab_banner", lambda _sock, _timeout: None)
+    monkeypatch.setattr("scanner.scanner.recv_banner", lambda _sock, _timeout: None)
 
     result = probe_tcp_port("::1", 80, 0.5, family=socket.AF_INET6)
     assert result.state is PortState.OPEN

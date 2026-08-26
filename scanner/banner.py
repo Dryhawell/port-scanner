@@ -1,11 +1,12 @@
 """Passive banner capture and light parsing for open TCP ports.
 
 Only data the server sends first is read. This module does not send HTTP,
-SMTP, or other application probes. Many services (HTTP, TLS) send nothing
+SMTP, TLS, or other application probes. Many services (HTTP, TLS) send nothing
 until the client speaks, so a missing banner is normal.
 
-parse_banner() classifies that unsolicited text. A match is a hint from the
-greeting, not proof of a specific daemon or a vulnerability.
+classify_banner() looks at raw bytes first (MySQL greeting, TLS record, AMQP,
+Telnet IAC), then parse_banner() classifies ASCII greetings. A match is a hint
+from the greeting, not proof of a specific daemon or a vulnerability.
 """
 
 from __future__ import annotations
@@ -35,6 +36,10 @@ _SENDMAIL = re.compile(r"\bsendmail\b", re.IGNORECASE)
 _MS_ESMTP = re.compile(r"microsoft esmtp(?: mail service)?(?:,?\s*version:\s*([\w.]+))?", re.IGNORECASE)
 _MS_FTP = re.compile(r"microsoft ftp service", re.IGNORECASE)
 _DOVECOT = re.compile(r"\bdovecot\b", re.IGNORECASE)
+_RFB = re.compile(r"^RFB (\d{3}\.\d{3})")
+_HTTP_SERVER = re.compile(r"\bServer:\s*(\S+)", re.IGNORECASE)
+_REDIS_ERR = re.compile(r"^-(?:ERR|NOAUTH)\b", re.IGNORECASE)
+_MYSQL_VERSION = re.compile(r"^\d+\.\d+")
 _VERSIONISH = re.compile(r"^\d")
 
 _PRODUCT_NAMES = {
@@ -48,6 +53,9 @@ _PRODUCT_NAMES = {
     "dovecot": "Dovecot",
     "filezilla": "FileZilla",
     "sendmail": "Sendmail",
+    "nginx": "nginx",
+    "apache": "Apache",
+    "microsoft-iis": "Microsoft-IIS",
 }
 
 
@@ -60,8 +68,8 @@ class BannerHint:
     version: str | None = None
 
 
-def grab_banner(sock: socket.socket, timeout: float) -> str | None:
-    """Read a short banner if the peer sends data within the wait window."""
+def recv_banner(sock: socket.socket, timeout: float) -> bytes | None:
+    """Read raw bytes if the peer sends data within the wait window."""
     wait = min(timeout, DEFAULT_BANNER_TIMEOUT)
     readable, _writable, _errors = select.select([sock], [], [], wait)
     if not readable:
@@ -69,6 +77,32 @@ def grab_banner(sock: socket.socket, timeout: float) -> str | None:
     try:
         raw = sock.recv(MAX_BANNER_BYTES)
     except OSError:
+        return None
+    return raw or None
+
+
+def grab_banner(sock: socket.socket, timeout: float) -> str | None:
+    """Read a short banner if the peer sends data within the wait window."""
+    return sanitize_banner(recv_banner(sock, timeout))
+
+
+def classify_banner(raw: bytes | None) -> BannerHint:
+    """Classify unsolicited bytes: binary signatures first, then text greetings."""
+    if not raw:
+        return BannerHint()
+    binary = _parse_binary_banner(raw)
+    if binary.kind:
+        return binary
+    return parse_banner(sanitize_banner(raw))
+
+
+def visible_banner(raw: bytes | None, hint: BannerHint) -> str | None:
+    """Prefer the ASCII greeting; use a short label for binary-only protocols."""
+    if hint.kind in {"mysql", "tls", "amqp", "telnet"}:
+        if hint.product and hint.version:
+            return f"{hint.product} {hint.version}"
+        return hint.product or hint.kind
+    if not raw:
         return None
     return sanitize_banner(raw)
 
@@ -99,14 +133,76 @@ def parse_banner(text: str | None) -> BannerHint:
     if ssh.kind:
         return ssh
     if _HTTP.match(cleaned):
-        return BannerHint(kind="http")
+        return _parse_http(cleaned)
     if _POP3.match(cleaned):
         return BannerHint(kind="pop3", product=_product_if_dovecot(cleaned))
     if _IMAP.match(cleaned):
         return BannerHint(kind="imap", product=_product_if_dovecot(cleaned))
+    rfb = _RFB.match(cleaned)
+    if rfb:
+        return BannerHint(kind="vnc", product="VNC", version=rfb.group(1))
+    if _REDIS_ERR.match(cleaned):
+        return BannerHint(kind="redis")
+    if cleaned.startswith("AMQP"):
+        return BannerHint(kind="amqp", product="AMQP")
     if _GREETING_220.match(cleaned):
         return _parse_220(cleaned)
     return BannerHint()
+
+
+def _parse_binary_banner(raw: bytes) -> BannerHint:
+    if raw.startswith(b"AMQP"):
+        return BannerHint(kind="amqp", product="AMQP")
+    if len(raw) >= 3 and raw[0] == 0x16 and raw[1] == 0x03 and raw[2] <= 0x04:
+        return BannerHint(kind="tls", product="TLS")
+    mysql = _parse_mysql_handshake(raw)
+    if mysql.kind:
+        return mysql
+    if len(raw) >= 3 and raw[0] == 0xFF and raw[1] in {0xFA, 0xFB, 0xFC, 0xFD, 0xFE}:
+        return BannerHint(kind="telnet")
+    return BannerHint()
+
+
+def _parse_mysql_handshake(raw: bytes) -> BannerHint:
+    """MySQL/MariaDB protocol 10 greeting: 3-byte length, seq, 0x0a, version\\0."""
+    if len(raw) < 8:
+        return BannerHint()
+    length = int.from_bytes(raw[0:3], "little")
+    if length < 5 or length > MAX_BANNER_BYTES:
+        return BannerHint()
+    if raw[4] != 10:
+        return BannerHint()
+    rest = raw[5:]
+    nul = rest.find(b"\x00")
+    if nul < 3:
+        return BannerHint()
+    try:
+        version = rest[:nul].decode("ascii")
+    except UnicodeDecodeError:
+        return BannerHint()
+    if not _MYSQL_VERSION.match(version):
+        return BannerHint()
+    product, pretty = _mysql_product_version(version)
+    return BannerHint(kind="mysql", product=product, version=pretty)
+
+
+def _mysql_product_version(version: str) -> tuple[str, str]:
+    if "mariadb" not in version.lower():
+        return "MySQL", version
+    for part in version.split("-"):
+        if part.lower() == "mariadb":
+            continue
+        if _MYSQL_VERSION.match(part) and not part.startswith("5.5.5"):
+            return "MariaDB", part
+    return "MariaDB", version
+
+
+def _parse_http(text: str) -> BannerHint:
+    match = _HTTP_SERVER.search(text)
+    if match is None:
+        return BannerHint(kind="http")
+    product, version = _split_product_version(match.group(1).rstrip(";,"))
+    return BannerHint(kind="http", product=product, version=version)
 
 
 def _parse_ssh(text: str) -> BannerHint:
