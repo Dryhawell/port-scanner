@@ -28,6 +28,7 @@ from scanner.constants import (
     PROTOCOL_UDP,
     SCAN_PROFILES,
 )
+from scanner.advisory import DISCLAIMER, lookup_advisories
 from scanner.compare import live_host_delta, open_port_delta
 from scanner.discover import discover_hosts
 from scanner.models import (
@@ -91,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --history\n"
             "  python main.py --history-id 3\n"
             "  python main.py --history-diff 3 4\n"
+            "  python main.py --target 127.0.0.1 --ports 21,23 --no-refs\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -215,6 +217,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not record this run in the local sqlite database",
     )
+    parser.add_argument(
+        "--no-refs",
+        action="store_true",
+        help="Do not print local reference notes on the CLI (not a vuln scan either way)",
+    )
     return parser
 
 
@@ -234,7 +241,12 @@ def format_result(result: PortScanResult) -> str:
     return " ".join(parts)
 
 
-def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
+def print_report(
+    report: ScanReport,
+    *,
+    show_closed: bool = False,
+    show_refs: bool = True,
+) -> None:
     scanned = len(report.results)
     open_count = report.count(PortState.OPEN)
     closed_count = report.count(PortState.CLOSED)
@@ -260,11 +272,18 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
         print("No open ports found." if not show_closed else "No ports to display.")
         return
 
+    printed_refs = False
     for result in visible:
         print(format_result(result))
+        if show_refs and result.state is PortState.OPEN:
+            for note in lookup_advisories(result):
+                print(f"    note: {note.line()}")
+                printed_refs = True
 
     print()
     print(f"Found: {open_count} open port(s)")
+    if printed_refs:
+        print(DISCLAIMER)
 
 
 def format_host_result(result: HostDiscoveryResult) -> str:
@@ -516,7 +535,7 @@ def _run_scan(
         return 130, None
 
     _end_progress_line(args.verbose)
-    print_report(report, show_closed=args.show_closed)
+    print_report(report, show_closed=args.show_closed, show_refs=not args.no_refs)
 
     try:
         saved = _maybe_export(report, args.output, args.format, run_index=run_index)
@@ -616,7 +635,11 @@ def _run_history_query(args: argparse.Namespace, logger: logging.Logger) -> int:
             if isinstance(report, DiscoveryReport):
                 print_discovery_report(report, show_closed=args.show_closed)
             else:
-                print_report(report, show_closed=args.show_closed)
+                print_report(
+                    report,
+                    show_closed=args.show_closed,
+                    show_refs=not args.no_refs,
+                )
             try:
                 saved = _maybe_export(report, args.output, args.format)
             except ExportError as extra:

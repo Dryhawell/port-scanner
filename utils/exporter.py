@@ -15,6 +15,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from scanner.advisory import DISCLAIMER, advisory_label, lookup_advisories
 from scanner.constants import APP_NAME, APP_VERSION
 from scanner.models import DiscoveryReport, HostDiscoveryResult, HostState, PortScanResult, ScanReport
 from scanner.port import PortState
@@ -165,7 +166,17 @@ def _write_json(report: ScanReport, path: Path) -> None:
 
 
 def _write_csv(report: ScanReport, path: Path) -> None:
-    fieldnames = ("port", "state", "protocol", "service", "product", "version", "response_time", "banner")
+    fieldnames = (
+        "port",
+        "state",
+        "protocol",
+        "service",
+        "product",
+        "version",
+        "response_time",
+        "banner",
+        "refs",
+    )
     try:
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -289,7 +300,7 @@ def report_to_html(report: ScanReport) -> str:
     rows = "\n".join(_html_result_row(item) for item in report.results)
     if not rows:
         rows = (
-            '<tr><td colspan="7" class="empty">No ports in this report.</td></tr>'
+            '<tr><td colspan="8" class="empty">No ports in this report.</td></tr>'
         )
     return (
         "<!DOCTYPE html>\n"
@@ -303,7 +314,8 @@ def report_to_html(report: ScanReport) -> str:
         "<body>\n"
         "<main>\n"
         f"<p class=\"notice\">{html.escape(APP_NAME)} {html.escape(APP_VERSION)}"
-        " — authorized TCP connect scan only. Not a vulnerability assessment.</p>\n"
+        " — authorized TCP connect scan only. Not a vulnerability assessment. "
+        f"{html.escape(DISCLAIMER)}</p>\n"
         "<h1>Scan report</h1>\n"
         "<section class=\"meta\">\n"
         f"<div><span>Target</span><strong>{html.escape(report.target)}</strong></div>\n"
@@ -327,7 +339,7 @@ def report_to_html(report: ScanReport) -> str:
         "<table>\n"
         "<thead><tr>"
         "<th>Port</th><th>State</th><th>Protocol</th>"
-        "<th>Service</th><th>Product</th><th>Response</th><th>Banner</th>"
+        "<th>Service</th><th>Product</th><th>Response</th><th>Banner</th><th>Notes</th>"
         "</tr></thead>\n"
         f"<tbody>\n{rows}\n</tbody>\n"
         "</table>\n"
@@ -354,6 +366,7 @@ def report_to_pdf(report: ScanReport) -> bytes:
         f"Target: {report.target}  ({report.resolved_ip})  IPv{report.ip_version}",
         f"Protocol: {report.protocol}    Method: {method}",
         f"Ports: {report.port_label()}    Timeout: {report.timeout}s    Threads: {report.max_workers}",
+        "Notes: local reference table, not a vulnerability scan.",
         f"Scan time: {_isoformat(report.started_at) or '-'}    Duration: {duration}",
         (
             f"Scanned: {len(report.results)}    "
@@ -438,6 +451,7 @@ def _html_result_row(result: PortScanResult) -> str:
     service = result.service or "—"
     product = result.product_label() or "—"
     banner = result.banner or "—"
+    notes = "; ".join(item.short_label() for item in lookup_advisories(result)) or "—"
     state = result.state.value
     return (
         f'<tr class="{html.escape(state)}">'
@@ -448,6 +462,7 @@ def _html_result_row(result: PortScanResult) -> str:
         f"<td>{html.escape(product)}</td>"
         f"<td>{html.escape(latency)}</td>"
         f"<td class=\"banner\">{html.escape(banner)}</td>"
+        f"<td>{html.escape(notes)}</td>"
         "</tr>"
     )
 
@@ -501,6 +516,7 @@ def _result_to_dict(result: PortScanResult) -> dict[str, object]:
         "response_time": _round_time(result.response_time),
         "banner": result.banner,
         "timestamp": _isoformat(result.timestamp),
+        "advisories": [item.to_dict() for item in lookup_advisories(result)],
     }
 
 
@@ -515,6 +531,7 @@ def _result_to_csv_row(result: PortScanResult) -> dict[str, object]:
         "version": result.banner_version or "",
         "response_time": "" if response is None else response,
         "banner": result.banner or "",
+        "refs": advisory_label(result),
     }
 
 

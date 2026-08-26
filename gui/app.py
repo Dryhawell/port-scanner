@@ -13,6 +13,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
+from scanner.advisory import advisory_label
 from scanner.constants import (
     APP_VERSION,
     DEFAULT_MAX_WORKERS,
@@ -57,7 +58,7 @@ TIMEOUT = "#d29922"
 ENTRY_BG = "#21262d"
 BUTTON_BG = "#238636"
 BUTTON_FG = "#ffffff"
-COLUMNS = ("port", "state", "protocol", "service", "product", "response_time", "banner")
+COLUMNS = ("port", "state", "protocol", "service", "product", "response_time", "banner", "refs")
 DISCOVERY_COLUMNS = ("host", "state", "evidence", "response_time")
 POLL_MS = 50
 
@@ -366,6 +367,7 @@ class ScannerApp:
                 "product": "Product",
                 "response_time": "Response Time",
                 "banner": "Banner",
+                "refs": "Notes",
             }
             widths = {
                 "port": 70,
@@ -373,8 +375,9 @@ class ScannerApp:
                 "protocol": 80,
                 "service": 90,
                 "product": 140,
-                "response_time": 120,
-                "banner": 280,
+                "response_time": 110,
+                "banner": 200,
+                "refs": 180,
             }
             stretch = "banner"
         self.table.configure(columns=columns)
@@ -983,6 +986,7 @@ class ScannerApp:
                 result.product_label() or "",
                 result.latency_label() or "",
                 result.banner or "",
+                advisory_label(result),
             ),
             tags=(result.state.value,),
         )

@@ -59,6 +59,8 @@ def test_report_to_html_includes_summary() -> None:
     assert "OPEN" in document
     assert "CLOSED" in document
     assert "tcp_connect" in document
+    assert "Notes" in document
+    assert "SSH remote login" in document
     assert "<svg" in document
     assert 'xmlns="http://www.w3.org/2000/svg"' in document
 
@@ -81,6 +83,11 @@ def test_export_html_writes_file(tmp_path: Path) -> None:
 def test_sparse_json_includes_ports_list() -> None:
     payload = report_to_dict(_sample_report())
     assert payload["ports"] == [22, 80]
+    results = payload["results"]
+    assert isinstance(results, list)
+    first = results[0]
+    assert isinstance(first, dict)
+    assert first["advisories"][0]["title"] == "SSH remote login"
 
 
 def test_invalid_format() -> None:

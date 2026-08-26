@@ -167,6 +167,39 @@ def test_parser_accepts_history_flags() -> None:
         ["--target", "127.0.0.1", "--ports", "80", "--no-history"]
     )
     assert skip.no_history is True
+    quiet = parser.parse_args(
+        ["--target", "127.0.0.1", "--ports", "23", "--no-refs"]
+    )
+    assert quiet.no_refs is True
+
+
+def test_cli_prints_reference_notes_unless_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    report = ScanReport(
+        target="127.0.0.1",
+        resolved_ip="127.0.0.1",
+        start_port=23,
+        end_port=23,
+        timeout=0.5,
+        results=[PortScanResult(port=23, state=PortState.OPEN, service="telnet")],
+    )
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            return report
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "23"]) == 0
+    shown = capsys.readouterr().out
+    assert "note:" in shown
+    assert "CWE-319" in shown
+    assert "not a vulnerability scan" in shown.lower()
+    assert run(["--target", "127.0.0.1", "--ports", "23", "--no-refs"]) == 0
+    quiet = capsys.readouterr().out
+    assert "note:" not in quiet
 
 
 def test_run_rejects_history_flag_combos() -> None:

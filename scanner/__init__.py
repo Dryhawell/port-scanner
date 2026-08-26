@@ -1,5 +1,6 @@
 """TCP connect scan engine: validation, probing, discovery, service hints, and banners."""
 
+from scanner.advisory import Advisory, lookup_advisories
 from scanner.banner import (
     BannerHint,
     classify_banner,
@@ -42,6 +43,7 @@ from scanner.validator import (
 )
 
 __all__ = [
+    "Advisory",
     "BannerHint",
     "DiscoveryReport",
     "HostDiscoveryResult",
@@ -55,6 +57,7 @@ __all__ = [
     "classify_banner",
     "discover_hosts",
     "grab_banner",
+    "lookup_advisories",
     "lookup_service",
     "parse_banner",
     "parse_discovery_targets",
