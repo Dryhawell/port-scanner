@@ -33,7 +33,7 @@ from scanner.models import (
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import ValidationError, validate_interval, validate_runs
-from utils.exporter import ExportError, ExportFormat, export_report
+from utils.exporter import ExportError, ExportFormat, export_report, infer_format
 from utils.logger import get_logger, setup_logging
 
 logger = get_logger()
@@ -271,7 +271,7 @@ class ScannerApp:
         ).pack(side="left")
         self.save_button = tk.Button(
             heading_row,
-            text="SAVE HTML",
+            text="SAVE REPORT",
             command=self.save_html_report,
             bg=ENTRY_BG,
             fg=FG,
@@ -663,13 +663,18 @@ class ScannerApp:
             return
         path = filedialog.asksaveasfilename(
             defaultextension=".html",
-            filetypes=(("HTML", "*.html"), ("All files", "*.*")),
+            filetypes=(
+                ("HTML", "*.html"),
+                ("PDF", "*.pdf"),
+                ("All files", "*.*"),
+            ),
             initialfile="scan_report.html",
         )
         if not path:
             return
+        fmt = infer_format(path) or ExportFormat.HTML
         try:
-            saved = export_report(self._last_report, path, ExportFormat.HTML)
+            saved = export_report(self._last_report, path, fmt)
         except ExportError as exc:
             logger.error("%s", exc)
             messagebox.showerror("Export failed", str(exc))

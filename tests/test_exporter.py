@@ -18,6 +18,7 @@ from utils.exporter import (
     path_for_run,
     report_to_dict,
     report_to_html,
+    report_to_pdf,
 )
 
 
@@ -81,8 +82,8 @@ def test_sparse_json_includes_ports_list() -> None:
 
 
 def test_invalid_format() -> None:
-    with pytest.raises(ExportError, match="json, csv, or html"):
-        export_report(_sample_report(), "out.bin", "pdf")
+    with pytest.raises(ExportError, match="json, csv, html, or pdf"):
+        export_report(_sample_report(), "out.bin", "docx")
 
 
 def _sample_discovery() -> DiscoveryReport:
@@ -128,3 +129,48 @@ def test_path_for_run_suffix() -> None:
     second = path_for_run("reports/scan.json", 2)
     assert first.as_posix() == "reports/scan.json"
     assert second.as_posix() == "reports/scan_run2.json"
+
+
+def test_infer_pdf_suffix() -> None:
+    assert infer_format("reports/scan.pdf") is ExportFormat.PDF
+
+
+def test_export_pdf_contains_header(tmp_path: Path) -> None:
+    output = tmp_path / "scan.pdf"
+    saved = export_report(_sample_report(), output, ExportFormat.PDF)
+    data = saved.read_bytes()
+    assert data.startswith(b"%PDF-1.4")
+    assert b"%%EOF" in data
+    assert b"Scan report" in data
+    assert b"127.0.0.1" in data
+    assert b"OPEN" in data
+    assert b"tcp_connect" in data
+    assert b"SSH-2.0-test" in data
+
+
+def test_pdf_escapes_parentheses() -> None:
+    payload = report_to_pdf(_sample_report(banner="ready (vsFTPd)"))
+    assert b"ready \\(vsFTPd\\)" in payload
+
+
+def test_export_discovery_pdf(tmp_path: Path) -> None:
+    output = tmp_path / "discovery.pdf"
+    saved = export_report(_sample_discovery(), output, ExportFormat.PDF)
+    data = saved.read_bytes()
+    assert data.startswith(b"%PDF-1.4")
+    assert b"tcp_ping" in data
+    assert b"192.168.1.1" in data
+
+
+def test_pdf_paginates_many_rows() -> None:
+    report = ScanReport(
+        target="127.0.0.1",
+        resolved_ip="127.0.0.1",
+        start_port=1,
+        end_port=80,
+        timeout=0.5,
+        results=[PortScanResult(port=port, state=PortState.CLOSED) for port in range(1, 81)],
+    )
+    payload = report_to_pdf(report)
+    assert b"cont." in payload
+    assert b"Page 2" in payload

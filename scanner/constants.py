@@ -7,7 +7,7 @@ Port ranges below are conventional IANA groupings, not proof of a service:
 """
 
 APP_NAME = "port-scanner"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.10.0"
 
 MIN_PORT = 1
 MAX_PORT = 65535

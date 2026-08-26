@@ -79,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5\n"
             "  python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json\n"
             "  python main.py --target 127.0.0.1 --ports 22 --format csv\n"
+            "  python main.py --target 127.0.0.1 --profile quick --format pdf\n"
             "  python main.py --target 127.0.0.1 --udp --ports 53,123,161\n"
             "  python main.py --target 127.0.0.1 --discover\n"
             "  python main.py --target 192.168.1.0/24 --discover --show-closed\n"
@@ -154,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--format",
         "-f",
         choices=[item.value for item in ExportFormat],
-        help="Report format: json, csv, or html (default: json when exporting)",
+        help="Report format: json, csv, html, or pdf (default: json when exporting)",
     )
     parser.add_argument(
         "--verbose",

@@ -34,6 +34,10 @@ def test_parser_accepts_profile_or_ports() -> None:
         ["--target", "127.0.0.1", "--ports", "80", "--format", "html"]
     )
     assert html_args.format == "html"
+    pdf_args = parser.parse_args(
+        ["--target", "127.0.0.1", "--ports", "80", "--format", "pdf"]
+    )
+    assert pdf_args.format == "pdf"
     ipv6_args = parser.parse_args(["--target", "localhost", "--ports", "80", "--ipv6"])
     assert ipv6_args.ipv6 is True
     udp_args = parser.parse_args(["--target", "127.0.0.1", "--udp", "--profile", "quick"])

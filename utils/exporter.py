@@ -1,7 +1,8 @@
-"""Export scan reports to JSON, CSV, or HTML.
+"""Export scan reports to JSON, CSV, HTML, or PDF.
 
 Generated files go under reports/ by default and are gitignored.
 JSON is for other tools; HTML is a self-contained page you can open in a browser.
+PDF is a simple stdlib-built document (Helvetica/Courier, no images).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from scanner.constants import APP_NAME, APP_VERSION
 from scanner.models import DiscoveryReport, HostDiscoveryResult, HostState, PortScanResult, ScanReport
 from scanner.port import PortState
 from utils.logger import get_logger
+from utils.pdf import build_pdf
 
 logger = get_logger()
 
@@ -28,6 +30,7 @@ class ExportFormat(str, Enum):
     JSON = "json"
     CSV = "csv"
     HTML = "html"
+    PDF = "pdf"
 
 
 class ExportError(ValueError):
@@ -106,12 +109,14 @@ def export_report(
             ExportFormat.JSON: _write_discovery_json,
             ExportFormat.CSV: _write_discovery_csv,
             ExportFormat.HTML: _write_discovery_html,
+            ExportFormat.PDF: _write_discovery_pdf,
         }
     else:
         writers = {
             ExportFormat.JSON: _write_json,
             ExportFormat.CSV: _write_csv,
             ExportFormat.HTML: _write_html,
+            ExportFormat.PDF: _write_pdf,
         }
     writers[format_name](report, output)
     logger.info("Report saved: %s", output)
@@ -336,6 +341,94 @@ def _write_html(report: ScanReport, path: Path) -> None:
         raise ExportError(f"Could not write HTML report: {exc}") from exc
 
 
+def report_to_pdf(report: ScanReport) -> bytes:
+    """Build a simple PDF for a port-scan report."""
+    duration = "-" if report.duration is None else f"{report.duration:.2f}s"
+    method = "udp_probe" if report.protocol == "udp" else "tcp_connect"
+    meta = [
+        f"Tool: {APP_NAME} {APP_VERSION}",
+        f"Target: {report.target}  ({report.resolved_ip})  IPv{report.ip_version}",
+        f"Protocol: {report.protocol}    Method: {method}",
+        f"Ports: {report.port_label()}    Timeout: {report.timeout}s    Threads: {report.max_workers}",
+        f"Scan time: {_isoformat(report.started_at) or '-'}    Duration: {duration}",
+        (
+            f"Scanned: {len(report.results)}    "
+            f"Open: {report.count(PortState.OPEN)}    "
+            f"Closed: {report.count(PortState.CLOSED)}    "
+            f"Timeout: {report.count(PortState.TIMEOUT)}"
+        ),
+    ]
+    header = f"{'Port':<6}{'State':<10}{'Proto':<7}{'Service':<12}{'Product':<18}{'Time':<10}Banner"
+    rows = [header, "-" * 96]
+    for item in report.results:
+        rows.append(
+            f"{item.port:<6}"
+            f"{item.state.value:<10}"
+            f"{item.protocol:<7}"
+            f"{(item.service or '-'):<12.12}"
+            f"{(item.product_label() or '-'):<18.18}"
+            f"{(item.latency_label() or '-'):<10}"
+            f"{item.banner or ''}"
+        )
+    if not report.results:
+        rows.append("(no ports in this report)")
+    return build_pdf(
+        "Scan report",
+        meta=meta,
+        rows=rows,
+        note="Authorized scan only. Not a vulnerability assessment.",
+    )
+
+
+def discovery_to_pdf(report: DiscoveryReport) -> bytes:
+    """Build a simple PDF for a TCP ping discovery report."""
+    duration = "-" if report.duration is None else f"{report.duration:.2f}s"
+    meta = [
+        f"Tool: {APP_NAME} {APP_VERSION}",
+        f"Target: {report.spec}    IPv{report.ip_version}    Method: tcp_ping",
+        f"Timeout: {report.timeout}s    Threads: {report.max_workers}",
+        f"Scan time: {_isoformat(report.started_at) or '-'}    Duration: {duration}",
+        (
+            f"Scanned: {len(report.results)}    "
+            f"Up: {report.count(HostState.UP)}    "
+            f"Down: {report.count(HostState.DOWN)}"
+        ),
+    ]
+    header = f"{'Host':<42}{'State':<8}{'Evidence':<22}Time"
+    rows = [header, "-" * 96]
+    for item in report.results:
+        rows.append(
+            f"{item.ip:<42}"
+            f"{item.state.value:<8}"
+            f"{(item.evidence or '-'):<22.22}"
+            f"{item.latency_label() or '-'}"
+        )
+    if not report.results:
+        rows.append("(no hosts in this report)")
+    return build_pdf(
+        "Host discovery",
+        meta=meta,
+        rows=rows,
+        note="Authorized TCP ping discovery only. Not a vulnerability assessment.",
+    )
+
+
+def _write_pdf(report: ScanReport, path: Path) -> None:
+    try:
+        path.write_bytes(report_to_pdf(report))
+    except OSError as extra:
+        logger.error("Could not write PDF report: %s", extra)
+        raise ExportError(f"Could not write PDF report: {extra}") from extra
+
+
+def _write_discovery_pdf(report: DiscoveryReport, path: Path) -> None:
+    try:
+        path.write_bytes(discovery_to_pdf(report))
+    except OSError as extra:
+        logger.error("Could not write PDF report: %s", extra)
+        raise ExportError(f"Could not write PDF report: {extra}") from extra
+
+
 def _html_result_row(result: PortScanResult) -> str:
     latency = result.latency_label() or "—"
     service = result.service or "—"
@@ -426,7 +519,7 @@ def _parse_format(fmt: ExportFormat | str) -> ExportFormat:
     try:
         return ExportFormat(cleaned)
     except ValueError as exc:
-        raise ExportError("Format must be json, csv, or html.") from exc
+        raise ExportError("Format must be json, csv, html, or pdf.") from exc
 
 
 def _isoformat(value: datetime | None) -> str | None:
