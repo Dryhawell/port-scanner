@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -79,3 +80,45 @@ class ScanReport:
         if len(ports) <= 12:
             return ",".join(str(port) for port in ports)
         return f"{ports[0]},{ports[1]},... ({len(ports)} ports)"
+
+
+class HostState(str, Enum):
+    """TCP-ping outcome for one address. DOWN includes filtered/silent hosts."""
+
+    UP = "UP"
+    DOWN = "DOWN"
+
+
+@dataclass(slots=True)
+class HostDiscoveryResult:
+    """Whether one IP answered a TCP ping on a discovery port."""
+
+    ip: str
+    state: HostState
+    evidence: str | None = None
+    response_time: float | None = None
+
+    def latency_label(self) -> str | None:
+        if self.response_time is None:
+            return None
+        return f"{self.response_time * 1000:.1f}ms"
+
+
+@dataclass(slots=True)
+class DiscoveryReport:
+    """TCP ping results for one host or an IPv4 CIDR."""
+
+    spec: str
+    results: list[HostDiscoveryResult]
+    timeout: float
+    max_workers: int = 1
+    duration: float | None = None
+    started_at: datetime = field(default_factory=_utc_now)
+    ip_version: int = 4
+
+    @property
+    def up_results(self) -> list[HostDiscoveryResult]:
+        return [item for item in self.results if item.state is HostState.UP]
+
+    def count(self, state: HostState) -> int:
+        return sum(1 for item in self.results if item.state is state)

@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.6.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a parsed passive banner.
+Version **1.7.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, and a parsed passive banner.
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -8,11 +8,14 @@ CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and 
 
 A TCP port is a numbered endpoint on a host. This scanner can act as a TCP client (full handshake) or send a tiny UDP datagram. TCP **OPEN** means the handshake completed. TCP **CLOSED** means the host refused. UDP **OPEN** means a datagram came back. UDP **CLOSED** means ICMP port-unreachable. In both modes, **TIMEOUT** means nothing useful arrived in time — for UDP that is often open|filtered, not proof the port is down.
 
+Host discovery is a **TCP ping**, not ICMP. Ports **80, 443, 22, 445** are probed in that order. **OPEN** or **CLOSED** means the stack answered, so the host is **UP**. All **TIMEOUT** is **DOWN** for this tool — the address may still be alive behind a filter.
+
 Use it to learn sockets, timeouts, concurrency, and how service banners look on systems you are allowed to test.
 
 ## Features
 
 - IPv4, IPv6, and hostname targets (hostname syntax check, then DNS at scan time)
+- Host discovery via TCP ping (`--discover`); IPv4 CIDR `/24` or smaller (max 256 addresses)
 - Inclusive port range `1-65535`, comma-separated lists (`22,80,443`), and named profiles (`quick`, `common`)
 - Concurrent TCP connect or UDP probe scan via `ThreadPoolExecutor` (default 50 workers, max 200)
 - OPEN / CLOSED / TIMEOUT from TCP `connect_ex` / `SO_ERROR`, or from UDP reply vs ICMP unreachable
@@ -61,24 +64,27 @@ python main.py --target 127.0.0.1 --profile quick
 python main.py --target ::1 --profile quick
 python main.py --target localhost --ipv6 --ports 22,80,443
 python main.py --target 127.0.0.1 --udp --profile quick --show-closed
+python main.py --target 127.0.0.1 --discover
+python main.py --target 192.168.1.0/24 --discover --show-closed
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--target` / `-t` | IPv4, IPv6, or hostname (required for CLI) |
-| `--ports` / `-p` | `80`, `1-1000`, or `22,80,443` (required unless `--profile`) |
+| `--target` / `-t` | IPv4, IPv6, hostname, or IPv4 CIDR with `--discover` (required for CLI) |
+| `--ports` / `-p` | `80`, `1-1000`, or `22,80,443` (required unless `--profile` or `--discover`) |
 | `--profile` | Named port set: `quick` or `common` (instead of `--ports`) |
 | `--timeout` | Connect timeout in seconds (default `0.5`) |
 | `--threads` | Max workers, `1-200` (default `50`) |
 | `--ipv6` | Resolve hostnames to IPv6 (AAAA). Literals keep their own family |
 | `--udp` | UDP probe instead of TCP connect |
-| `--show-closed` | Print CLOSED and TIMEOUT as well as OPEN |
+| `--discover` / `-d` | TCP ping instead of a port scan (do not combine with `--udp`, `--ports`, or `--profile`) |
+| `--show-closed` | Print CLOSED and TIMEOUT, or DOWN hosts during discovery |
 | `--output` / `-o` | Report path |
 | `--format` / `-f` | `json`, `csv`, or `html` |
 | `--verbose` / `-v` | DEBUG lines on the console |
 | `--gui` | Open the Tkinter UI |
 
-Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. They are still stored in reports. During a CLI scan, stderr shows a live ASCII progress bar (`Progress: [########........]  50%  Found: N open ports`). `--verbose` skips the bar so DEBUG lines stay readable.
+Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. They are still stored in reports. During discovery, DOWN hosts are hidden the same way. During a CLI scan, stderr shows a live ASCII progress bar (`Progress: [########........]  50%  Found: N open ports` or `live hosts`). `--verbose` skips the bar so DEBUG lines stay readable.
 
 ## CLI Examples
 
@@ -95,6 +101,8 @@ python main.py --target 127.0.0.1 --ports 22 --format csv
 python main.py --target 127.0.0.1 --profile quick --format html
 python main.py --target 127.0.0.1 --udp --ports 53,123,161 --show-closed
 python main.py --target 127.0.0.1 --udp --profile quick --show-closed
+python main.py --target 127.0.0.1 --discover
+python main.py --target 192.168.1.0/24 --discover --show-closed
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```
 
@@ -104,7 +112,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Product, Response Time, Banner). Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). After a scan finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
+Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **START SCAN**. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -131,6 +139,23 @@ Report saved: reports/scan_2026-08-25_1710.json
 
 On some Windows hosts, unused localhost ports time out instead of returning RST. That is a TIMEOUT, not a scanner bug.
 
+Discovery (`--discover`) prints live hosts instead of ports:
+
+```text
+Use this tool only on systems you are authorized to test.
+Discovering 192.168.1.0/24...
+Target: 192.168.1.0/24
+Method: tcp_ping (ports 80,443,22,445)
+Timeout: 0.5s
+Threads: 50
+Hosts:  254 (up=2, down=252)
+
+[+] 192.168.1.1 UP tcp/80 CLOSED 4.2ms
+[+] 192.168.1.10 UP tcp/443 OPEN 8.1ms
+
+Live: 2 host(s)
+```
+
 ## Architecture
 
 ```text
@@ -138,10 +163,11 @@ main.py                 entry point
 cli/interface.py        argparse, console report
 gui/app.py              Tkinter UI + background worker
 scanner/
-  validator.py          target / ports / profiles / timeout / threads
-  scanner.py            TCP connect engine
+  validator.py          target / CIDR / ports / profiles / timeout / threads
+  scanner.py            TCP connect and UDP probe engine
+  discover.py           TCP ping host discovery
   port.py               OPEN / CLOSED / TIMEOUT
-  models.py             PortScanResult, ScanReport
+  models.py             scan and discovery report types
   service.py            getservbyport hint
   banner.py             passive recv, sanitize, parse
 utils/
@@ -152,16 +178,16 @@ reports/                generated reports (gitignored)
 logs/                   scanner.log (gitignored)
 ```
 
-Interfaces never open sockets themselves. They call `TcpConnectScanner`.
+Interfaces never open sockets themselves. They call `TcpConnectScanner` or `discover_hosts`.
 
 ## How It Works
 
-1. Validate target, ports (range, list, or profile), timeout, and thread count.
-2. Resolve hostname to IPv4 (A) or IPv6 (AAAA) with `socket.getaddrinfo`. Literals skip DNS. Dual-stack names prefer IPv4 unless `--ipv6` / Prefer IPv6.
-3. Probe each port concurrently (TCP connect or UDP datagram, bounded thread pool).
-4. Map the outcome to OPEN / CLOSED / TIMEOUT.
-5. For OPEN TCP ports, look up a service name, read a banner if the peer speaks first, and parse that greeting. UDP OPEN ports get a table name if the OS knows one; there is no TCP-style banner parse.
-6. Sort results by port number and print, export (JSON, CSV, or HTML), or show in the GUI.
+1. Validate the target (host, or IPv4 CIDR for discovery), ports (range, list, or profile), timeout, and thread count.
+2. Resolve hostname to IPv4 (A) or IPv6 (AAAA) with `socket.getaddrinfo`. Literals skip DNS. Dual-stack names prefer IPv4 unless `--ipv6` / Prefer IPv6. CIDR discovery expands IPv4 hosts and skips DNS.
+3. Probe each host (TCP ping) or each port concurrently (TCP connect or UDP datagram, bounded thread pool).
+4. Map the outcome to UP / DOWN, or OPEN / CLOSED / TIMEOUT.
+5. For OPEN TCP ports, look up a service name, read a banner if the peer speaks first, and parse that greeting. UDP OPEN ports get a table name if the OS knows one; there is no TCP-style banner parse. Discovery does not grab banners.
+6. Sort results and print, export (JSON, CSV, or HTML), or show in the GUI.
 
 ## TCP Connect Scanning
 
@@ -176,6 +202,17 @@ On Windows, `connect_ex` often returns `WSAEWOULDBLOCK` (10035) before the hands
 `connect()` would raise on every closed port. `connect_ex()` returns an errno instead, which is a better fit for a scanner. This is a **full connect scan**, not SYN-only, not stealth, and not a firewall bypass.
 
 TIMEOUT is not a reliable IDS/firewall fingerprint.
+
+## Host Discovery
+
+`--discover` does not send ICMP echo and does not use ARP. It TCP-pings **80, 443, 22, 445** with the same `connect_ex` path as a port scan, but without waiting for a banner.
+
+- SYN-ACK (**OPEN**) or RST (**CLOSED**) → the host stack answered → **UP**
+- All four probes **TIMEOUT** → **DOWN** for this tool (offline, filtered, or those ports are unused and silent)
+
+A closed port is still evidence the host is there. Silence is not proof it is gone. IPv4 CIDR `/24` or smaller is expanded (`/32` is one address). `/16` and IPv6 networks are rejected. Port scans still reject a slash in `--target`.
+
+This is not a stealth scan, not ICMP, and not an ARP sweep.
 
 ## UDP Probing
 
@@ -228,20 +265,22 @@ python -m pip install -r requirements.txt
 python -m pytest
 ```
 
-Tests cover validation, connect-code mapping, mocked TCP/UDP probes, mocked DNS, service lookup, and banner parsing. They do not scan the public internet.
+Tests cover validation, connect-code mapping, mocked TCP/UDP probes, mocked DNS, TCP ping discovery, service lookup, and banner parsing. They do not scan the public internet.
 
 ## Limitations
 
 - One address family per run (IPv4 or IPv6, not both at once)
 - One protocol per run (TCP or UDP, not both at once)
 - IPv6 zone identifiers (`fe80::1%eth0`) are not supported
-- No SYN/FIN/Xmas, no spoofing, no raw ICMP sockets
+- No SYN/FIN/Xmas, no spoofing, no raw ICMP or ARP
+- Host discovery is TCP ping on 80/443/22/445, not ICMP echo; DOWN includes filtered/silent hosts
+- Discovery CIDR is IPv4 `/24` or smaller (max 256 addresses); IPv6 networks are not expanded
+- Port scans still take a single host; CIDR is only valid with `--discover`
 - UDP TIMEOUT is open|filtered, not a certain closed verdict
 - UDP payload is a null byte, not a protocol handshake
 - Service names are table lookups, not protocol fingerprinting
 - Banner parsing is heuristic and passive; HTTP/TLS often send nothing until the client speaks
 - TIMEOUT vs CLOSED depends on the OS and firewall
-- One target per run; no host discovery
 
 ## Authorized Use
 
@@ -260,7 +299,6 @@ Logs and reports may contain IP addresses, port numbers, and banners. Do not log
 ## Future Improvements
 
 - Advanced service detection
-- Host discovery
 - Scheduled authorized scans
 - PDF reports
 - Scan history in a database

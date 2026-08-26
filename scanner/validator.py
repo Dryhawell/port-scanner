@@ -11,8 +11,10 @@ import re
 from typing import Final
 
 from scanner.constants import (
+    MAX_DISCOVERY_HOSTS,
     MAX_PORT,
     MAX_WORKERS,
+    MIN_DISCOVERY_PREFIX,
     MIN_PORT,
     PROTOCOL_TCP,
     PROTOCOL_UDP,
@@ -63,6 +65,49 @@ def validate_target(target: str) -> str:
         return _validate_ipv6(cleaned)
 
     return _validate_hostname(cleaned)
+
+
+def parse_discovery_targets(value: str) -> tuple[str, list[str]]:
+    """Return (spec, hosts) for TCP ping discovery.
+
+    A single IPv4/IPv6/hostname is one host. An IPv4 CIDR such as
+    192.168.1.0/24 expands to its usable hosts. Networks larger than /24
+    are rejected. Port scans still use validate_target() and do not accept CIDR.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError("Invalid target.")
+    cleaned = value.strip()
+    if "://" in cleaned or " " in cleaned:
+        raise ValidationError("Invalid target.")
+    if "/" in cleaned:
+        network, hosts = _expand_ipv4_network(cleaned)
+        return str(network), hosts
+    single = validate_target(cleaned)
+    return single, [single]
+
+
+def _expand_ipv4_network(value: str) -> tuple[ipaddress.IPv4Network, list[str]]:
+    try:
+        network = ipaddress.IPv4Network(value, strict=False)
+    except ipaddress.NetmaskValueError as exc:
+        raise ValidationError("Invalid IP network.") from exc
+    except ipaddress.AddressValueError as exc:
+        if ":" in value:
+            raise ValidationError("IPv6 networks are not supported.") from exc
+        raise ValidationError("Invalid IP network.") from exc
+
+    if network.prefixlen < MIN_DISCOVERY_PREFIX or network.num_addresses > MAX_DISCOVERY_HOSTS:
+        raise ValidationError(
+            f"Network too large. Use /{MIN_DISCOVERY_PREFIX} or smaller "
+            f"(max {MAX_DISCOVERY_HOSTS} addresses)."
+        )
+    if network.prefixlen == 32:
+        hosts = [str(network.network_address)]
+    else:
+        hosts = [str(item) for item in network.hosts()]
+    if not hosts:
+        raise ValidationError("Invalid IP network.")
+    return network, hosts
 
 
 def validate_port(port: int | str) -> int:

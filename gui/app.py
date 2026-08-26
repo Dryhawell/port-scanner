@@ -20,7 +20,14 @@ from scanner.constants import (
     SCAN_PROFILES,
     UDP_SCAN_PROFILES,
 )
-from scanner.models import PortScanResult, ScanReport
+from scanner.discover import discover_hosts
+from scanner.models import (
+    DiscoveryReport,
+    HostDiscoveryResult,
+    HostState,
+    PortScanResult,
+    ScanReport,
+)
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import ValidationError
@@ -40,6 +47,7 @@ ENTRY_BG = "#21262d"
 BUTTON_BG = "#238636"
 BUTTON_FG = "#ffffff"
 COLUMNS = ("port", "state", "protocol", "service", "product", "response_time", "banner")
+DISCOVERY_COLUMNS = ("host", "state", "evidence", "response_time")
 POLL_MS = 50
 
 
@@ -64,7 +72,7 @@ class ScannerApp:
         self._events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._worker: threading.Thread | None = None
         self._open_seen = 0
-        self._last_report: ScanReport | None = None
+        self._last_report: ScanReport | DiscoveryReport | None = None
         self._build_style()
         self._build_layout()
 
@@ -140,10 +148,11 @@ class ScannerApp:
         self.threads_var = tk.StringVar(value=str(DEFAULT_MAX_WORKERS))
         self.profile_var = tk.StringVar(value="Custom")
         self.protocol_var = tk.StringVar(value="TCP")
+        self.discover_var = tk.BooleanVar(value=False)
         self.ipv6_var = tk.BooleanVar(value=False)
 
         fields = (
-            ("Target IP / Hostname", self.target_var, 0, 0, 2),
+            ("Target / CIDR", self.target_var, 0, 0, 2),
             ("Start Port", self.start_port_var, 0, 2, 1),
             ("End Port", self.end_port_var, 0, 3, 1),
             ("Timeout (s)", self.timeout_var, 1, 0, 1),
@@ -197,6 +206,20 @@ class ScannerApp:
             1,
             ("TCP", "UDP"),
         )
+        discover_cell = tk.Frame(inner, bg=PANEL)
+        discover_cell.grid(row=2, column=2, sticky="w", padx=8, pady=(0, 4))
+        tk.Checkbutton(
+            discover_cell,
+            text="Host discovery",
+            variable=self.discover_var,
+            bg=PANEL,
+            fg=FG,
+            selectcolor=ENTRY_BG,
+            activebackground=PANEL,
+            activeforeground=FG,
+            highlightthickness=0,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w")
         for index in range(4):
             inner.grid_columnconfigure(index, weight=1)
 
@@ -266,31 +289,51 @@ class ScannerApp:
             selectmode="browse",
         )
         scroll.config(command=self.table.yview)
-        headings = {
-            "port": "Port",
-            "state": "State",
-            "protocol": "Protocol",
-            "service": "Service",
-            "product": "Product",
-            "response_time": "Response Time",
-            "banner": "Banner",
-        }
-        widths = {
-            "port": 70,
-            "state": 90,
-            "protocol": 80,
-            "service": 90,
-            "product": 140,
-            "response_time": 120,
-            "banner": 280,
-        }
-        for key, title in headings.items():
-            self.table.heading(key, text=title, anchor="w")
-            self.table.column(key, width=widths[key], stretch=key == "banner", anchor="w")
         self.table.tag_configure("OPEN", foreground=ACCENT)
         self.table.tag_configure("CLOSED", foreground=CLOSED)
         self.table.tag_configure("TIMEOUT", foreground=TIMEOUT)
+        self.table.tag_configure("UP", foreground=ACCENT)
+        self.table.tag_configure("DOWN", foreground=CLOSED)
+        self._set_table_mode(discover=False)
         self.table.pack(fill="both", expand=True)
+
+    def _set_table_mode(self, *, discover: bool) -> None:
+        if discover:
+            columns = DISCOVERY_COLUMNS
+            headings = {
+                "host": "Host",
+                "state": "State",
+                "evidence": "Evidence",
+                "response_time": "Response Time",
+            }
+            widths = {"host": 180, "state": 90, "evidence": 180, "response_time": 130}
+            stretch = "host"
+        else:
+            columns = COLUMNS
+            headings = {
+                "port": "Port",
+                "state": "State",
+                "protocol": "Protocol",
+                "service": "Service",
+                "product": "Product",
+                "response_time": "Response Time",
+                "banner": "Banner",
+            }
+            widths = {
+                "port": 70,
+                "state": 90,
+                "protocol": 80,
+                "service": 90,
+                "product": 140,
+                "response_time": 120,
+                "banner": 280,
+            }
+            stretch = "banner"
+        self.table.configure(columns=columns)
+        self.table["displaycolumns"] = columns
+        for key, title in headings.items():
+            self.table.heading(key, text=title, anchor="w")
+            self.table.column(key, width=widths[key], stretch=key == stretch, anchor="w")
 
     def _labeled_entry(
         self,
@@ -348,19 +391,31 @@ class ScannerApp:
         profile = self.profile_var.get()
         prefer_ipv6 = bool(self.ipv6_var.get())
         protocol = self.protocol_var.get()
+        discover = bool(self.discover_var.get())
 
         self._clear_table()
+        self._set_table_mode(discover=discover)
         self._open_seen = 0
         self._last_report = None
         self.save_button.config(state="disabled")
         self.progress["value"] = 0
-        self.open_count_var.set("Open ports: 0")
-        self.status_var.set("Scanning...")
+        self.open_count_var.set("Live hosts: 0" if discover else "Open ports: 0")
+        self.status_var.set("Discovering..." if discover else "Scanning...")
         self.start_button.config(state="disabled")
 
         self._worker = threading.Thread(
             target=self._scan_worker,
-            args=(target, start_port, end_port, timeout, threads, profile, prefer_ipv6, protocol),
+            args=(
+                target,
+                start_port,
+                end_port,
+                timeout,
+                threads,
+                profile,
+                prefer_ipv6,
+                protocol,
+                discover,
+            ),
             daemon=True,
             name="scan-worker",
         )
@@ -377,7 +432,31 @@ class ScannerApp:
         profile: str,
         prefer_ipv6: bool,
         protocol: str,
+        discover: bool,
     ) -> None:
+        if discover:
+            def on_host_progress(completed: int, total: int, result: HostDiscoveryResult) -> None:
+                self._events.put(("host_progress", completed, total, result))
+
+            try:
+                report = discover_hosts(
+                    target,
+                    timeout=timeout,
+                    max_workers=threads,
+                    on_progress=on_host_progress,
+                    prefer_ipv6=prefer_ipv6,
+                )
+            except ValidationError as exc:
+                logger.error("%s", exc)
+                self._events.put(("error", str(exc)))
+                return
+            except ScannerError as exc:
+                logger.error("%s", exc)
+                self._events.put(("error", str(exc)))
+                return
+            self._events.put(("host_done", report))
+            return
+
         def on_progress(completed: int, total: int, result: PortScanResult) -> None:
             self._events.put(("progress", completed, total, result))
 
@@ -424,8 +503,14 @@ class ScannerApp:
                 if kind == "progress":
                     _name, completed, total, result = event
                     self._handle_progress(completed, total, result)
+                elif kind == "host_progress":
+                    _name, completed, total, result = event
+                    self._handle_host_progress(completed, total, result)
                 elif kind == "done":
                     self._show_report(event[1])
+                    return
+                elif kind == "host_done":
+                    self._show_discovery_report(event[1])
                     return
                 elif kind == "error":
                     self._finish_with_error(event[1])
@@ -454,6 +539,22 @@ class ScannerApp:
             f"Scanning {result.port}...  {completed}/{total}  ({percent:.0f}%)"
         )
 
+    def _handle_host_progress(
+        self,
+        completed: int,
+        total: int,
+        result: HostDiscoveryResult,
+    ) -> None:
+        percent = (completed / total) * 100 if total else 100
+        self.progress["value"] = percent
+        if result.state is HostState.UP:
+            self._open_seen += 1
+            self.open_count_var.set(f"Live hosts: {self._open_seen}")
+            self._insert_host(result)
+        self.status_var.set(
+            f"Checking {result.ip}...  {completed}/{total}  ({percent:.0f}%)"
+        )
+
     def _show_report(self, report: ScanReport) -> None:
         self._clear_table()
         for result in report.results:
@@ -464,6 +565,21 @@ class ScannerApp:
         self.status_var.set(
             f"Done. {report.target} ({report.resolved_ip})  |  "
             f"{report.port_label()}  |  {duration}"
+        )
+        self.progress["value"] = 100
+        self._last_report = report
+        self.save_button.config(state="normal")
+        self.start_button.config(state="normal")
+
+    def _show_discovery_report(self, report: DiscoveryReport) -> None:
+        self._clear_table()
+        for result in report.results:
+            self._insert_host(result)
+        up_count = report.count(HostState.UP)
+        self.open_count_var.set(f"Live hosts: {up_count}")
+        duration = f"{report.duration:.2f}s" if report.duration is not None else "?"
+        self.status_var.set(
+            f"Done. {report.spec}  |  {len(report.results)} hosts  |  {duration}"
         )
         self.progress["value"] = 100
         self._last_report = report
@@ -500,6 +616,19 @@ class ScannerApp:
                 result.product_label() or "",
                 result.latency_label() or "",
                 result.banner or "",
+            ),
+            tags=(result.state.value,),
+        )
+
+    def _insert_host(self, result: HostDiscoveryResult) -> None:
+        self.table.insert(
+            "",
+            "end",
+            values=(
+                result.ip,
+                result.state.value,
+                result.evidence or "",
+                result.latency_label() or "",
             ),
             tags=(result.state.value,),
         )

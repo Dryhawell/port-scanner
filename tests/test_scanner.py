@@ -52,6 +52,19 @@ def test_probe_open_with_mock_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     sock.close.assert_called_once()
 
 
+def test_probe_skips_banner_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = MagicMock()
+    sock.connect_ex.return_value = 0
+    grab = MagicMock(return_value="SSH-2.0-OpenSSH_9.2")
+    monkeypatch.setattr("scanner.scanner.socket.socket", lambda *args, **kwargs: sock)
+    monkeypatch.setattr("scanner.scanner.grab_banner", grab)
+
+    result = probe_tcp_port("127.0.0.1", 22, 0.5, with_banner=False)
+    assert result.state is PortState.OPEN
+    assert result.banner is None
+    grab.assert_not_called()
+
+
 def test_probe_closed_with_mock_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     sock = MagicMock()
     sock.connect_ex.return_value = errno.ECONNREFUSED

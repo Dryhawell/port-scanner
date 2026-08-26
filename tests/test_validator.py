@@ -7,6 +7,7 @@ import pytest
 from scanner.constants import SCAN_PROFILES, UDP_SCAN_PROFILES
 from scanner.validator import (
     ValidationError,
+    parse_discovery_targets,
     parse_port_range,
     parse_ports,
     resolve_scan_profile,
@@ -42,6 +43,8 @@ def test_invalid_hostname() -> None:
         validate_target("")
     with pytest.raises(ValidationError, match="Invalid target"):
         validate_target("http://example.com")
+    with pytest.raises(ValidationError, match="Invalid target"):
+        validate_target("192.168.1.0/24")
     with pytest.raises(ValidationError, match="Invalid hostname"):
         validate_target("-bad.example.com")
 
@@ -120,6 +123,37 @@ def test_validate_protocol() -> None:
     assert validate_protocol("udp") == "udp"
     with pytest.raises(ValidationError, match="tcp or udp"):
         validate_protocol("icmp")
+
+
+def test_parse_discovery_targets_single_host() -> None:
+    assert parse_discovery_targets("127.0.0.1") == ("127.0.0.1", ["127.0.0.1"])
+    assert parse_discovery_targets("localhost") == ("localhost", ["localhost"])
+    assert parse_discovery_targets("::1") == ("::1", ["::1"])
+
+
+def test_parse_discovery_targets_ipv4_cidr() -> None:
+    spec, hosts = parse_discovery_targets("127.0.0.1/32")
+    assert spec == "127.0.0.1/32"
+    assert hosts == ["127.0.0.1"]
+    spec, hosts = parse_discovery_targets("192.168.1.0/30")
+    assert spec == "192.168.1.0/30"
+    assert hosts == ["192.168.1.1", "192.168.1.2"]
+    spec, hosts = parse_discovery_targets("192.168.1.0/24")
+    assert spec == "192.168.1.0/24"
+    assert len(hosts) == 254
+    assert hosts[0] == "192.168.1.1"
+    assert hosts[-1] == "192.168.1.254"
+
+
+def test_parse_discovery_targets_rejects_large_and_ipv6_nets() -> None:
+    with pytest.raises(ValidationError, match="Network too large"):
+        parse_discovery_targets("192.168.0.0/16")
+    with pytest.raises(ValidationError, match="Network too large"):
+        parse_discovery_targets("10.0.0.0/23")
+    with pytest.raises(ValidationError, match="IPv6 networks"):
+        parse_discovery_targets("2001:db8::/64")
+    with pytest.raises(ValidationError, match="Invalid IP network"):
+        parse_discovery_targets("999.1.1.0/24")
 
 
 def test_timeout_and_threads() -> None:

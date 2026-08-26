@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from cli.interface import build_parser, render_progress_bar
+import pytest
+
+from cli.interface import build_parser, render_progress_bar, run
 
 
 def test_progress_bar_empty_and_full() -> None:
@@ -34,3 +36,16 @@ def test_parser_accepts_profile_or_ports() -> None:
     assert ipv6_args.ipv6 is True
     udp_args = parser.parse_args(["--target", "127.0.0.1", "--udp", "--profile", "quick"])
     assert udp_args.udp is True
+    discover_args = parser.parse_args(["--target", "192.168.1.0/24", "--discover"])
+    assert discover_args.discover is True
+    assert discover_args.ports is None
+    assert discover_args.profile is None
+
+
+def test_run_rejects_discover_combined_with_scan_flags() -> None:
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--discover", "--udp"])
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--discover", "--ports", "80"])
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--discover", "--profile", "quick"])

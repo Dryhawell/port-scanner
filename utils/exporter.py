@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 
 from scanner.constants import APP_NAME, APP_VERSION
-from scanner.models import PortScanResult, ScanReport
+from scanner.models import DiscoveryReport, HostDiscoveryResult, HostState, PortScanResult, ScanReport
 from scanner.port import PortState
 from utils.logger import get_logger
 
@@ -69,8 +69,31 @@ def report_to_dict(report: ScanReport) -> dict[str, object]:
     return payload
 
 
+def discovery_to_dict(report: DiscoveryReport) -> dict[str, object]:
+    """Serialize a TCP ping discovery into a JSON-friendly dictionary."""
+    live = [item.ip for item in report.up_results]
+    return {
+        "tool": APP_NAME,
+        "version": APP_VERSION,
+        "scan_method": "tcp_ping",
+        "target": report.spec,
+        "ip_version": report.ip_version,
+        "scan_time": _isoformat(report.started_at),
+        "duration": _round_time(report.duration),
+        "timeout": report.timeout,
+        "threads": report.max_workers,
+        "live_hosts": live,
+        "summary": {
+            "scanned": len(report.results),
+            "up": report.count(HostState.UP),
+            "down": report.count(HostState.DOWN),
+        },
+        "results": [_host_to_dict(item) for item in report.results],
+    }
+
+
 def export_report(
-    report: ScanReport,
+    report: ScanReport | DiscoveryReport,
     path: str | Path,
     fmt: ExportFormat | str,
 ) -> Path:
@@ -78,11 +101,18 @@ def export_report(
     format_name = _parse_format(fmt)
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    writers = {
-        ExportFormat.JSON: _write_json,
-        ExportFormat.CSV: _write_csv,
-        ExportFormat.HTML: _write_html,
-    }
+    if isinstance(report, DiscoveryReport):
+        writers = {
+            ExportFormat.JSON: _write_discovery_json,
+            ExportFormat.CSV: _write_discovery_csv,
+            ExportFormat.HTML: _write_discovery_html,
+        }
+    else:
+        writers = {
+            ExportFormat.JSON: _write_json,
+            ExportFormat.CSV: _write_csv,
+            ExportFormat.HTML: _write_html,
+        }
     writers[format_name](report, output)
     logger.info("Report saved: %s", output)
     return output
@@ -130,6 +160,107 @@ def _write_csv(report: ScanReport, path: Path) -> None:
     except OSError as exc:
         logger.error("Could not write CSV report: %s", exc)
         raise ExportError(f"Could not write CSV report: {exc}") from exc
+
+
+def _write_discovery_json(report: DiscoveryReport, path: Path) -> None:
+    try:
+        path.write_text(
+            json.dumps(discovery_to_dict(report), indent=JSON_INDENT, ensure_ascii=True)
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.error("Could not write JSON report: %s", exc)
+        raise ExportError(f"Could not write JSON report: {exc}") from exc
+
+
+def _write_discovery_csv(report: DiscoveryReport, path: Path) -> None:
+    fieldnames = ("ip", "state", "evidence", "response_time")
+    try:
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for item in report.results:
+                response = _round_time(item.response_time)
+                writer.writerow(
+                    {
+                        "ip": item.ip,
+                        "state": item.state.value,
+                        "evidence": item.evidence or "",
+                        "response_time": "" if response is None else response,
+                    }
+                )
+    except OSError as exc:
+        logger.error("Could not write CSV report: %s", exc)
+        raise ExportError(f"Could not write CSV report: {exc}") from exc
+
+
+def _write_discovery_html(report: DiscoveryReport, path: Path) -> None:
+    try:
+        path.write_text(_discovery_to_html(report), encoding="utf-8")
+    except OSError as exc:
+        logger.error("Could not write HTML report: %s", exc)
+        raise ExportError(f"Could not write HTML report: {exc}") from exc
+
+
+def _discovery_to_html(report: DiscoveryReport) -> str:
+    up_count = report.count(HostState.UP)
+    down_count = report.count(HostState.DOWN)
+    duration = "—" if report.duration is None else f"{report.duration:.2f}s"
+    scan_time = _isoformat(report.started_at) or "—"
+    rows = "\n".join(_html_host_row(item) for item in report.results)
+    if not rows:
+        rows = '<tr><td colspan="4" class="empty">No hosts in this report.</td></tr>'
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="en">\n'
+        "<head>\n"
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>{html.escape(APP_NAME)} discovery — {html.escape(report.spec)}</title>\n"
+        f"<style>{_HTML_CSS}</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<main>\n"
+        f"<p class=\"notice\">{html.escape(APP_NAME)} {html.escape(APP_VERSION)}"
+        " — authorized TCP ping discovery only. Not a vulnerability assessment.</p>\n"
+        "<h1>Host discovery</h1>\n"
+        "<section class=\"meta\">\n"
+        f"<div><span>Target</span><strong>{html.escape(report.spec)}</strong></div>\n"
+        f"<div><span>IP version</span><strong>IPv{report.ip_version}</strong></div>\n"
+        f"<div><span>Method</span><strong>tcp_ping</strong></div>\n"
+        f"<div><span>Scan time</span><strong>{html.escape(scan_time)}</strong></div>\n"
+        f"<div><span>Duration</span><strong>{html.escape(duration)}</strong></div>\n"
+        f"<div><span>Timeout</span><strong>{html.escape(str(report.timeout))}s</strong></div>\n"
+        f"<div><span>Threads</span><strong>{html.escape(str(report.max_workers))}</strong></div>\n"
+        "</section>\n"
+        "<section class=\"summary\">\n"
+        f"<div class=\"stat\"><span>Scanned</span><strong>{len(report.results)}</strong></div>\n"
+        f"<div class=\"stat open\"><span>Up</span><strong>{up_count}</strong></div>\n"
+        f"<div class=\"stat closed\"><span>Down</span><strong>{down_count}</strong></div>\n"
+        "</section>\n"
+        "<table>\n"
+        "<thead><tr><th>Host</th><th>State</th><th>Evidence</th><th>Response</th></tr></thead>\n"
+        f"<tbody>\n{rows}\n</tbody>\n"
+        "</table>\n"
+        "</main>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _html_host_row(result: HostDiscoveryResult) -> str:
+    latency = result.latency_label() or "—"
+    evidence = result.evidence or "—"
+    state = result.state.value
+    return (
+        f'<tr class="{html.escape(state)}">'
+        f"<td>{html.escape(result.ip)}</td>"
+        f"<td>{html.escape(state)}</td>"
+        f"<td>{html.escape(evidence)}</td>"
+        f"<td>{html.escape(latency)}</td>"
+        "</tr>"
+    )
 
 
 def report_to_html(report: ScanReport) -> str:
@@ -233,13 +364,22 @@ h1{font:600 28px Consolas,ui-monospace,monospace;margin:0 0 16px}
 table{width:100%;border-collapse:collapse;background:#161b22;border:1px solid #30363d}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #30363d;font:13px Consolas,ui-monospace,monospace}
 th{color:#8b949e;font-size:11px;text-transform:uppercase}
-tr.OPEN td:nth-child(2){color:#3fb950}
-tr.CLOSED td:nth-child(2){color:#f85149}
+tr.OPEN td:nth-child(2),tr.UP td:nth-child(2){color:#3fb950}
+tr.CLOSED td:nth-child(2),tr.DOWN td:nth-child(2){color:#f85149}
 tr.TIMEOUT td:nth-child(2){color:#d29922}
 td.banner{color:#8b949e;word-break:break-word}
 td.empty{text-align:center;color:#8b949e}
 @media (max-width:700px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 """.replace("\n", "")
+
+
+def _host_to_dict(result: HostDiscoveryResult) -> dict[str, object]:
+    return {
+        "ip": result.ip,
+        "state": result.state.value,
+        "evidence": result.evidence,
+        "response_time": _round_time(result.response_time),
+    }
 
 
 def _result_to_dict(result: PortScanResult) -> dict[str, object]:

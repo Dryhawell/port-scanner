@@ -22,7 +22,14 @@ from scanner.constants import (
     PROTOCOL_UDP,
     SCAN_PROFILES,
 )
-from scanner.models import PortScanResult, ScanReport
+from scanner.discover import discover_hosts
+from scanner.models import (
+    DiscoveryReport,
+    HostDiscoveryResult,
+    HostState,
+    PortScanResult,
+    ScanReport,
+)
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import (
@@ -65,7 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json\n"
             "  python main.py --target 127.0.0.1 --ports 22 --format csv\n"
             "  python main.py --target 127.0.0.1 --udp --ports 53,123,161\n"
-            "  python main.py --target 127.0.0.1 --udp --profile quick --show-closed\n"
+            "  python main.py --target 127.0.0.1 --discover\n"
+            "  python main.py --target 192.168.1.0/24 --discover --show-closed\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -85,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target",
         "-t",
-        help="IPv4, IPv6, or hostname to scan (required for CLI)",
+        help="IPv4, IPv6, hostname, or IPv4 CIDR with --discover (required for CLI)",
     )
     parser.add_argument(
         "--ports",
@@ -118,9 +126,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="UDP probe instead of TCP connect (silence is TIMEOUT / open|filtered)",
     )
     parser.add_argument(
+        "--discover",
+        "-d",
+        action="store_true",
+        help="TCP ping hosts instead of a port scan (IPv4 CIDR /24 or smaller)",
+    )
+    parser.add_argument(
         "--show-closed",
         action="store_true",
-        help="Print CLOSED and TIMEOUT ports as well as OPEN ports",
+        help="Print CLOSED/TIMEOUT ports, or DOWN hosts during discovery",
     )
     parser.add_argument(
         "--output",
@@ -189,6 +203,41 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
     print(f"Found: {open_count} open port(s)")
 
 
+def format_host_result(result: HostDiscoveryResult) -> str:
+    prefix = "[+]" if result.state is HostState.UP else "[?]"
+    parts = [prefix, result.ip, result.state.value]
+    if result.evidence:
+        parts.append(result.evidence)
+    latency = result.latency_label()
+    if latency:
+        parts.append(latency)
+    return " ".join(parts)
+
+
+def print_discovery_report(report: DiscoveryReport, *, show_closed: bool = False) -> None:
+    up_count = report.count(HostState.UP)
+    down_count = report.count(HostState.DOWN)
+    print(f"Target: {report.spec}")
+    print(f"Method: tcp_ping (ports 80,443,22,445)")
+    print(f"Timeout: {report.timeout}s")
+    print(f"Threads: {report.max_workers}")
+    if report.duration is not None:
+        print(f"Duration: {report.duration:.2f}s")
+    print(f"Hosts:  {len(report.results)} (up={up_count}, down={down_count})")
+    print()
+
+    visible = report.results if show_closed else report.up_results
+    if not visible:
+        print("No live hosts found." if not show_closed else "No hosts to display.")
+        return
+
+    for result in visible:
+        print(format_host_result(result))
+
+    print()
+    print(f"Live: {up_count} host(s)")
+
+
 def render_progress_bar(completed: int, total: int, width: int = PROGRESS_BAR_WIDTH) -> str:
     """Return a single-line ASCII progress bar, e.g. [########........]  50%."""
     if total <= 0:
@@ -217,12 +266,19 @@ def run(argv: list[str] | None = None) -> int:
 
     if not args.target:
         parser.error("--target is required unless --gui is used")
+    if args.discover and args.udp:
+        parser.error("host discovery uses TCP ping; do not combine --discover with --udp")
+    if args.discover and (args.ports or args.profile):
+        parser.error("do not combine --discover with --ports or --profile")
     if args.ports and args.profile:
         parser.error("use either --ports or --profile, not both")
-    if not args.ports and not args.profile:
-        parser.error("--ports or --profile is required unless --gui is used")
+    if not args.discover and not args.ports and not args.profile:
+        parser.error("--ports, --profile, or --discover is required unless --gui is used")
 
     logger = setup_logging(verbose=args.verbose)
+    if args.discover:
+        return _run_discovery(args, logger)
+
     protocol = PROTOCOL_UDP if args.udp else PROTOCOL_TCP
 
     try:
@@ -283,8 +339,61 @@ def run(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _run_discovery(args: argparse.Namespace, logger: logging.Logger) -> int:
+    print("Use this tool only on systems you are authorized to test.")
+    print(f"Discovering {args.target}...")
+    sys.stdout.flush()
+
+    live_found = 0
+
+    def on_progress(completed: int, total: int, result: HostDiscoveryResult) -> None:
+        nonlocal live_found
+        if result.state is HostState.UP:
+            live_found += 1
+        if not args.verbose:
+            _print_discovery_progress(completed, total, live_found)
+
+    try:
+        report = discover_hosts(
+            args.target,
+            timeout=args.timeout,
+            max_workers=args.threads,
+            on_progress=on_progress,
+            prefer_ipv6=args.ipv6,
+        )
+    except ValidationError as exc:
+        _end_progress_line(args.verbose)
+        return _cli_error(logger, exc)
+    except ScannerError as exc:
+        _end_progress_line(args.verbose)
+        return _cli_error(logger, exc)
+    except KeyboardInterrupt:
+        _end_progress_line(args.verbose)
+        logger.warning("Discovery interrupted.")
+        print("Scan interrupted.", file=sys.stderr)
+        return 130
+
+    _end_progress_line(args.verbose)
+    print_discovery_report(report, show_closed=args.show_closed)
+
+    try:
+        saved = _maybe_export(report, args.output, args.format)
+    except ExportError as exc:
+        return _cli_error(logger, exc)
+
+    if saved is not None:
+        print(f"Report saved: {saved}")
+    return 0
+
+
+def _print_discovery_progress(completed: int, total: int, live_count: int) -> None:
+    bar = render_progress_bar(completed, total)
+    line = f"\rProgress: {bar}  Found: {live_count} live hosts"
+    print(line, end="", file=sys.stderr, flush=True)
+
+
 def _maybe_export(
-    report: ScanReport,
+    report: ScanReport | DiscoveryReport,
     output: str | None,
     fmt: str | None,
 ) -> Path | None:

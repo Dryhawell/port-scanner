@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from scanner.models import PortScanResult, ScanReport
+from scanner.models import DiscoveryReport, HostDiscoveryResult, HostState, PortScanResult, ScanReport
 from scanner.port import PortState
 from utils.exporter import (
     ExportError,
     ExportFormat,
+    discovery_to_dict,
     export_report,
     infer_format,
     report_to_dict,
@@ -81,3 +82,41 @@ def test_sparse_json_includes_ports_list() -> None:
 def test_invalid_format() -> None:
     with pytest.raises(ExportError, match="json, csv, or html"):
         export_report(_sample_report(), "out.bin", "pdf")
+
+
+def _sample_discovery() -> DiscoveryReport:
+    return DiscoveryReport(
+        spec="192.168.1.0/30",
+        results=[
+            HostDiscoveryResult(
+                ip="192.168.1.1",
+                state=HostState.UP,
+                evidence="tcp/80 CLOSED",
+                response_time=0.01,
+            ),
+            HostDiscoveryResult(ip="192.168.1.2", state=HostState.DOWN),
+        ],
+        timeout=0.5,
+        max_workers=2,
+        duration=0.2,
+        started_at=datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_discovery_json_uses_tcp_ping() -> None:
+    payload = discovery_to_dict(_sample_discovery())
+    assert payload["scan_method"] == "tcp_ping"
+    assert payload["target"] == "192.168.1.0/30"
+    assert payload["live_hosts"] == ["192.168.1.1"]
+    assert payload["summary"] == {"scanned": 2, "up": 1, "down": 1}
+
+
+def test_export_discovery_html(tmp_path: Path) -> None:
+    output = tmp_path / "discovery.html"
+    saved = export_report(_sample_discovery(), output, ExportFormat.HTML)
+    text = saved.read_text(encoding="utf-8")
+    assert "Host discovery" in text
+    assert "tcp_ping" in text
+    assert "192.168.1.1" in text
+    assert 'class="UP"' in text
+    assert 'class="DOWN"' in text

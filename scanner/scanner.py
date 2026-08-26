@@ -145,6 +145,7 @@ def probe_tcp_port(
     port: int,
     timeout: float,
     family: int = socket.AF_INET,
+    with_banner: bool = True,
 ) -> PortScanResult:
     """Try one TCP connect and map the outcome to OPEN / CLOSED / TIMEOUT.
 
@@ -165,7 +166,11 @@ def probe_tcp_port(
         if error_code in _IN_PROGRESS_CODES:
             error_code = _wait_for_connect(sock, timeout)
         state = _state_from_connect_code(error_code)
-        banner = grab_banner(sock, timeout) if state is PortState.OPEN else None
+        banner = (
+            grab_banner(sock, timeout)
+            if with_banner and state is PortState.OPEN
+            else None
+        )
         hint = parse_banner(banner)
         result = PortScanResult(
             port=port,
