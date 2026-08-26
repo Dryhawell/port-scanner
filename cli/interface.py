@@ -222,6 +222,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not print local reference notes on the CLI (not a vuln scan either way)",
     )
+    parser.add_argument(
+        "--no-diff",
+        action="store_true",
+        help="Do not compare this run to the last stored scan of the same target",
+    )
     return parser
 
 
@@ -544,6 +549,7 @@ def _run_scan(
 
     if saved is not None:
         print(f"Report saved: {saved}")
+    _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
     _maybe_record(report, args.no_history)
     return 0, report
 
@@ -599,6 +605,7 @@ def _run_discovery(
 
     if saved is not None:
         print(f"Report saved: {saved}")
+    _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
     _maybe_record(report, args.no_history)
     return 0, report
 
@@ -618,6 +625,48 @@ def _maybe_record(report: ScanReport | DiscoveryReport, skip: bool) -> None:
         print(f"History not saved: {extra}", file=sys.stderr)
         return
     print(f"History recorded: #{scan_id}")
+
+
+def _maybe_baseline_diff(
+    report: ScanReport | DiscoveryReport,
+    skip: bool,
+    *,
+    run_index: int = 1,
+) -> None:
+    """Diff against the last stored scan. Scheduled run 2+ already diffs in-process."""
+    if skip or run_index > 1:
+        return
+    try:
+        found = ScanHistory().previous_for(report)
+    except HistoryError as extra:
+        print(f"Baseline not compared: {extra}", file=sys.stderr)
+        return
+    if found is None:
+        return
+    scan_id, previous = found
+    stamp = previous.started_at.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"Changes vs stored #{scan_id} ({stamp} UTC):")
+    if isinstance(previous, DiscoveryReport) and isinstance(report, DiscoveryReport):
+        appeared, disappeared = live_host_delta(previous, report, only_shared=True)
+        if not appeared and not disappeared:
+            print("  (none)")
+            return
+        for host in appeared:
+            print(f"  [+] {host} newly up")
+        for host in disappeared:
+            print(f"  [-] {host} no longer up")
+        return
+    if isinstance(previous, ScanReport) and isinstance(report, ScanReport):
+        appeared, disappeared = open_port_delta(previous, report, only_shared=True)
+        if not appeared and not disappeared:
+            print("  (none)")
+            return
+        for port in appeared:
+            print(f"  [+] {port} newly open")
+        for port in disappeared:
+            print(f"  [-] {port} no longer open")
+        return
+    print("  (none)")
 
 
 def _run_history_query(args: argparse.Namespace, logger: logging.Logger) -> int:

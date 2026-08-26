@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.13.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`). Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.14.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -26,6 +26,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Scheduled repeats in this process (`--interval` 5–86400s, `--runs` or Ctrl+C), with a diff of newly open / gone ports
 - JSON, CSV, HTML, and simple PDF reports under `reports/`
 - Local sqlite scan history (`reports/history.db`) with list / show / diff
+- Automatic baseline diff vs the last stored scan of the same target (`--no-diff` to skip)
 - Result-count charts: ASCII on the CLI, SVG in HTML reports, Tkinter canvas in the GUI
 - Local reference notes on some OPEN ports (hardening / historical CVE ids; not a vuln scan)
 - File logging to `logs/scanner.log`
@@ -100,6 +101,7 @@ python main.py --history-diff 3 4
 | `--history-diff` | Compare two stored ids (`OLD NEW`): newly open / gone ports, or newly up / gone hosts |
 | `--no-history` | Do not record this run |
 | `--no-refs` | Do not print local reference notes on the CLI |
+| `--no-diff` | Do not compare this run to the last stored scan of the same target |
 | `--gui` | Open the Tkinter UI |
 
 Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. They are still stored in reports. During discovery, DOWN hosts are hidden the same way. During a CLI scan, stderr shows a live ASCII progress bar (`Progress: [########........]  50%  Found: N open ports` or `live hosts`). `--verbose` skips the bar so DEBUG lines stay readable.
@@ -130,6 +132,7 @@ python main.py --history-id 3 --format html
 python main.py --history-diff 3 4
 python main.py --target 127.0.0.1 --ports 21,23
 python main.py --target 127.0.0.1 --ports 21,23 --no-refs
+python main.py --target 127.0.0.1 --profile quick --no-diff
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```
 
@@ -139,7 +142,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner, Notes. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE REPORT** writes HTML or PDF (the file extension chooses the format). **HISTORY** lists stored runs from `reports/history.db`; double-click or **LOAD** to show one in the table. A bar chart under the progress bar shows OPEN / CLOSED / TIMEOUT (or UP / DOWN); the history window charts hits across stored runs. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
+Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner, Notes. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE REPORT** writes HTML or PDF (the file extension chooses the format). **HISTORY** lists stored runs from `reports/history.db`; double-click or **LOAD** to show one in the table. A bar chart under the progress bar shows OPEN / CLOSED / TIMEOUT (or UP / DOWN); the history window charts hits across stored runs. A single scan’s status line can include `vs history #N` when a previous stored run of the same target exists. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -227,7 +230,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner` or `disc
 4. Map the outcome to UP / DOWN, or OPEN / CLOSED / TIMEOUT.
 5. For OPEN TCP ports, look up a service name (OS table, then fallback map). If the peer speaks first, classify that greeting (ASCII or a few binary signatures). UDP OPEN ports get a table/fallback name if known; there is no TCP-style banner parse. Discovery does not grab banners. OPEN ports may also get a **local reference note** (hardening or a historical CVE id). That is a table lookup, not a live CVE feed and not a confirmation.
 6. Sort results and print, export (JSON, CSV, HTML, or PDF), or show in the GUI. HTML includes an SVG count chart; the CLI prints ASCII bars.
-7. Record the run in `reports/history.db` unless `--no-history` is set.
+7. Record the run in `reports/history.db` unless `--no-history` is set. If an older stored scan of the same target exists, print a baseline diff (ports probed in both runs only). `--interval` run 2+ diffs in-process instead.
 8. If `--interval` is set, wait and repeat. After the second run, print ports (or hosts) that appeared or disappeared.
 
 ## Scheduled Scans
@@ -262,6 +265,8 @@ python main.py --target 127.0.0.1 --profile quick --no-history
 ```
 
 `--history-diff OLD NEW` treats the first id as the baseline and reuses the same open-port / live-host diff as `--interval`. You cannot compare a port scan with a discovery run. The GUI **HISTORY** button lists recent rows; **LOAD** (or double-click) shows one in the results table without writing a duplicate row.
+
+A normal scan also diffs against the **latest stored run** of the same target, kind, and protocol (`localhost` and `127.0.0.1` are different strings). Only ports (or hosts) probed in **both** runs are compared, so a `quick` follow-up does not pretend that unprobed ports vanished. `--interval` run 2+ keeps the in-process diff and skips this extra lookup. `--no-diff` turns the automatic baseline off. This is still a lab change detector, not an alerting platform.
 
 The database is gitignored. It can hold IP addresses, port numbers, and banners from systems you scanned — keep it on a machine you control.
 
@@ -396,6 +401,7 @@ Tests cover validation, connect-code mapping, mocked TCP/UDP probes, mocked DNS,
 - TIMEOUT vs CLOSED depends on the OS and firewall
 - Repeats run in the foreground; this is not a system scheduler or a persistence mechanism
 - Scan history is a local sqlite file, not an alerting platform or a remote archive
+- Baseline diffs match the target string exactly and only ports/hosts seen in both runs
 - Charts scale to the largest count in that picture; they are not a risk score or a network map
 - Reference notes are a small local table, not a CVE feed, not version-wide matching, and not a confirmation
 - PDF uses built-in Helvetica/Courier only; it is not a full print layout engine

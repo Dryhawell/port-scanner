@@ -78,6 +78,10 @@ def test_scheduled_runs_sleep_and_diff(monkeypatch: pytest.MonkeyPatch, capsys: 
     sleeps: list[float] = []
     monkeypatch.setattr("cli.interface.time.sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr("cli.interface.record_report", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
     reports = [
         ScanReport(
             target="127.0.0.1",
@@ -129,6 +133,10 @@ def test_scan_records_history_unless_disabled(
         return 9
 
     monkeypatch.setattr("cli.interface.record_report", fake_record)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
     report = ScanReport(
         target="127.0.0.1",
         resolved_ip="127.0.0.1",
@@ -171,6 +179,10 @@ def test_parser_accepts_history_flags() -> None:
         ["--target", "127.0.0.1", "--ports", "23", "--no-refs"]
     )
     assert quiet.no_refs is True
+    silent = parser.parse_args(
+        ["--target", "127.0.0.1", "--ports", "80", "--no-diff"]
+    )
+    assert silent.no_diff is True
 
 
 def test_cli_prints_reference_notes_unless_disabled(
@@ -178,6 +190,10 @@ def test_cli_prints_reference_notes_unless_disabled(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
     report = ScanReport(
         target="127.0.0.1",
         resolved_ip="127.0.0.1",
@@ -288,3 +304,50 @@ def test_history_diff_cli(
     assert "443" in output
     assert "80" in output
     assert "no longer open" in output
+
+
+def test_scan_diffs_against_stored_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db_path = tmp_path / "history.db"
+    monkeypatch.setattr("utils.history.DEFAULT_DB_PATH", db_path)
+    first = ScanReport(
+        target="127.0.0.1",
+        resolved_ip="127.0.0.1",
+        start_port=80,
+        end_port=443,
+        timeout=0.5,
+        results=[
+            PortScanResult(port=80, state=PortState.OPEN),
+            PortScanResult(port=443, state=PortState.CLOSED),
+        ],
+    )
+    second = ScanReport(
+        target="127.0.0.1",
+        resolved_ip="127.0.0.1",
+        start_port=80,
+        end_port=443,
+        timeout=0.5,
+        results=[
+            PortScanResult(port=80, state=PortState.OPEN),
+            PortScanResult(port=443, state=PortState.OPEN),
+        ],
+    )
+    queue = [first, second, second]
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            return queue.pop(0)
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "80,443"]) == 0
+    assert "Changes vs stored" not in capsys.readouterr().out
+    assert run(["--target", "127.0.0.1", "--ports", "80,443"]) == 0
+    changed = capsys.readouterr().out
+    assert "Changes vs stored #" in changed
+    assert "newly open" in changed
+    assert "443" in changed
+    assert run(["--target", "127.0.0.1", "--ports", "80,443", "--no-diff"]) == 0
+    assert "Changes vs stored" not in capsys.readouterr().out

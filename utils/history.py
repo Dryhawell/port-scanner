@@ -170,6 +170,39 @@ class ScanHistory:
             ).fetchall()
             return _row_to_port_scan(row, ports)
 
+    def previous_for(
+        self,
+        report: ScanReport | DiscoveryReport,
+    ) -> tuple[int, ScanReport | DiscoveryReport] | None:
+        """Return the newest stored run for the same target/kind/protocol."""
+        if not self.path.exists():
+            return None
+        if isinstance(report, DiscoveryReport):
+            kind = KIND_DISCOVERY
+            target = report.spec
+            protocol: str | None = None
+        else:
+            kind = KIND_PORT
+            target = report.target
+            protocol = report.protocol
+        with self._session() as conn:
+            if protocol is None:
+                row = conn.execute(
+                    "SELECT id FROM scans WHERE target = ? AND kind = ? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (target, kind),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id FROM scans WHERE target = ? AND kind = ? "
+                    "AND protocol = ? ORDER BY id DESC LIMIT 1",
+                    (target, kind, protocol),
+                ).fetchone()
+        if row is None:
+            return None
+        scan_id = int(row["id"])
+        return scan_id, self.load(scan_id)
+
     def diff(
         self,
         first_id: int,

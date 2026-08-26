@@ -33,6 +33,17 @@ def test_open_port_delta_no_change() -> None:
     assert disappeared == []
 
 
+def test_open_port_delta_only_shared_ignores_unprobed() -> None:
+    previous = _scan((22, PortState.OPEN), (80, PortState.OPEN))
+    current = _scan((80, PortState.OPEN), (443, PortState.OPEN))
+    appeared, disappeared = open_port_delta(previous, current, only_shared=True)
+    assert appeared == []
+    assert disappeared == []
+    appeared, disappeared = open_port_delta(previous, current)
+    assert appeared == [443]
+    assert disappeared == [22]
+
+
 def test_live_host_delta() -> None:
     previous = DiscoveryReport(
         spec="192.168.1.0/30",

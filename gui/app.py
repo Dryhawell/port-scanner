@@ -680,6 +680,10 @@ class ScannerApp:
         )
         if self._delta_note:
             status = f"{status}  |  {self._delta_note}"
+        elif record:
+            baseline_note = self._baseline_note(report)
+            if baseline_note:
+                status = f"{status}  |  {baseline_note}"
         if record:
             history_note = self._record_history(report)
             if history_note:
@@ -709,6 +713,10 @@ class ScannerApp:
         status = f"Done. {report.spec}  |  {len(report.results)} hosts  |  {duration}"
         if self._delta_note:
             status = f"{status}  |  {self._delta_note}"
+        elif record:
+            baseline_note = self._baseline_note(report)
+            if baseline_note:
+                status = f"{status}  |  {baseline_note}"
         if record:
             history_note = self._record_history(report)
             if history_note:
@@ -751,6 +759,33 @@ class ScannerApp:
             logger.error("%s", extra)
             return "history not saved"
         return f"history #{scan_id}"
+
+    def _baseline_note(self, report: ScanReport | DiscoveryReport) -> str | None:
+        try:
+            found = ScanHistory().previous_for(report)
+        except HistoryError:
+            return None
+        if found is None:
+            return None
+        scan_id, previous = found
+        if isinstance(previous, DiscoveryReport) and isinstance(report, DiscoveryReport):
+            appeared, disappeared = live_host_delta(
+                previous, report, only_shared=True
+            )
+            label = "up"
+        elif isinstance(previous, ScanReport) and isinstance(report, ScanReport):
+            appeared, disappeared = open_port_delta(
+                previous, report, only_shared=True
+            )
+            label = "open"
+        else:
+            return None
+        if not appeared and not disappeared:
+            return f"vs history #{scan_id}: no change"
+        return (
+            f"vs history #{scan_id}: newly {label} {len(appeared)}; "
+            f"gone {len(disappeared)}"
+        )
 
     def show_history(self) -> None:
         try:

@@ -136,3 +136,33 @@ def test_diff_rejects_mixed_kinds(tmp_path: Path) -> None:
     host_id = store.save(_discovery())
     with pytest.raises(HistoryError, match="Cannot compare"):
         store.diff(port_id, host_id)
+
+
+def test_previous_for_same_target_and_protocol(tmp_path: Path) -> None:
+    store = ScanHistory(tmp_path / "history.db")
+    assert store.previous_for(_scan()) is None
+    first_id = store.save(_scan())
+    found = store.previous_for(_scan())
+    assert found is not None
+    scan_id, loaded = found
+    assert scan_id == first_id
+    assert isinstance(loaded, ScanReport)
+    udp = ScanReport(
+        target="127.0.0.1",
+        resolved_ip="127.0.0.1",
+        start_port=53,
+        end_port=53,
+        timeout=0.5,
+        results=[PortScanResult(port=53, state=PortState.OPEN, protocol="udp")],
+        protocol="udp",
+    )
+    assert store.previous_for(udp) is None
+    other = ScanReport(
+        target="10.0.0.1",
+        resolved_ip="10.0.0.1",
+        start_port=22,
+        end_port=80,
+        timeout=0.5,
+        results=[PortScanResult(port=22, state=PortState.OPEN)],
+    )
+    assert store.previous_for(other) is None
