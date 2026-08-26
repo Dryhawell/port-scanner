@@ -130,6 +130,14 @@ def default_output_path(fmt: ExportFormat | str) -> Path:
     return REPORTS_DIR / f"scan_{stamp}.{format_name.value}"
 
 
+def path_for_run(path: str | Path, run_index: int) -> Path:
+    """Return stem_runN.suffix so scheduled exports do not overwrite each other."""
+    output = Path(path)
+    if run_index <= 1:
+        return output
+    return output.with_name(f"{output.stem}_run{run_index}{output.suffix}")
+
+
 def infer_format(path: str | Path) -> ExportFormat | None:
     suffix = Path(path).suffix.lower().lstrip(".")
     if suffix in {item.value for item in ExportFormat}:

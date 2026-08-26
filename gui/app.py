@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -20,6 +21,7 @@ from scanner.constants import (
     SCAN_PROFILES,
     UDP_SCAN_PROFILES,
 )
+from scanner.compare import live_host_delta, open_port_delta
 from scanner.discover import discover_hosts
 from scanner.models import (
     DiscoveryReport,
@@ -30,7 +32,7 @@ from scanner.models import (
 )
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
-from scanner.validator import ValidationError
+from scanner.validator import ValidationError, validate_interval, validate_runs
 from utils.exporter import ExportError, ExportFormat, export_report
 from utils.logger import get_logger, setup_logging
 
@@ -72,6 +74,7 @@ class ScannerApp:
         self._events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._worker: threading.Thread | None = None
         self._open_seen = 0
+        self._delta_note: str | None = None
         self._last_report: ScanReport | DiscoveryReport | None = None
         self._build_style()
         self._build_layout()
@@ -150,6 +153,8 @@ class ScannerApp:
         self.protocol_var = tk.StringVar(value="TCP")
         self.discover_var = tk.BooleanVar(value=False)
         self.ipv6_var = tk.BooleanVar(value=False)
+        self.interval_var = tk.StringVar(value="")
+        self.runs_var = tk.StringVar(value="1")
 
         fields = (
             ("Target / CIDR", self.target_var, 0, 0, 2),
@@ -220,6 +225,8 @@ class ScannerApp:
             highlightthickness=0,
             font=("Segoe UI", 9),
         ).pack(anchor="w")
+        self._labeled_entry(inner, "Interval (s)", self.interval_var, 3, 0, 1)
+        self._labeled_entry(inner, "Runs", self.runs_var, 3, 1, 1)
         for index in range(4):
             inner.grid_columnconfigure(index, weight=1)
 
@@ -392,10 +399,25 @@ class ScannerApp:
         prefer_ipv6 = bool(self.ipv6_var.get())
         protocol = self.protocol_var.get()
         discover = bool(self.discover_var.get())
+        interval_raw = self.interval_var.get().strip()
+        runs_raw = self.runs_var.get().strip() or "1"
+        try:
+            interval = validate_interval(interval_raw) if interval_raw else None
+            runs = validate_runs(runs_raw)
+        except ValidationError as exc:
+            messagebox.showerror("Invalid input", str(exc))
+            return
+        if runs > 1 and interval is None:
+            messagebox.showerror(
+                "Invalid input",
+                "Set an interval of at least 5 seconds to repeat a scan.",
+            )
+            return
 
         self._clear_table()
         self._set_table_mode(discover=discover)
         self._open_seen = 0
+        self._delta_note = None
         self._last_report = None
         self.save_button.config(state="disabled")
         self.progress["value"] = 0
@@ -415,6 +437,8 @@ class ScannerApp:
                 prefer_ipv6,
                 protocol,
                 discover,
+                interval,
+                runs,
             ),
             daemon=True,
             name="scan-worker",
@@ -433,39 +457,33 @@ class ScannerApp:
         prefer_ipv6: bool,
         protocol: str,
         discover: bool,
+        interval: float | None,
+        runs: int,
     ) -> None:
-        if discover:
-            def on_host_progress(completed: int, total: int, result: HostDiscoveryResult) -> None:
-                self._events.put(("host_progress", completed, total, result))
+        previous: ScanReport | DiscoveryReport | None = None
+        total_runs = max(1, runs)
 
-            try:
-                report = discover_hosts(
-                    target,
-                    timeout=timeout,
-                    max_workers=threads,
-                    on_progress=on_host_progress,
-                    prefer_ipv6=prefer_ipv6,
-                )
-            except ValidationError as exc:
-                logger.error("%s", exc)
-                self._events.put(("error", str(exc)))
-                return
-            except ScannerError as exc:
-                logger.error("%s", exc)
-                self._events.put(("error", str(exc)))
-                return
-            self._events.put(("host_done", report))
-            return
+        def on_host_progress(completed: int, total: int, result: HostDiscoveryResult) -> None:
+            self._events.put(("host_progress", completed, total, result))
 
         def on_progress(completed: int, total: int, result: PortScanResult) -> None:
             self._events.put(("progress", completed, total, result))
 
-        profile_key = profile.strip().lower()
-        scan_protocol = protocol.strip().lower()
-        profiles = UDP_SCAN_PROFILES if scan_protocol == PROTOCOL_UDP else SCAN_PROFILES
-        try:
+        def one_discovery() -> DiscoveryReport:
+            return discover_hosts(
+                target,
+                timeout=timeout,
+                max_workers=threads,
+                on_progress=on_host_progress,
+                prefer_ipv6=prefer_ipv6,
+            )
+
+        def one_scan() -> ScanReport:
+            profile_key = profile.strip().lower()
+            scan_protocol = protocol.strip().lower()
+            profiles = UDP_SCAN_PROFILES if scan_protocol == PROTOCOL_UDP else SCAN_PROFILES
             if profile_key in profiles:
-                report = self._scanner.scan(
+                return self._scanner.scan(
                     target,
                     timeout=timeout,
                     max_workers=threads,
@@ -474,26 +492,48 @@ class ScannerApp:
                     prefer_ipv6=prefer_ipv6,
                     protocol=scan_protocol,
                 )
-            else:
-                report = self._scanner.scan(
-                    target,
-                    start_port,
-                    end_port,
-                    timeout,
-                    threads,
-                    on_progress=on_progress,
-                    prefer_ipv6=prefer_ipv6,
-                    protocol=scan_protocol,
+            return self._scanner.scan(
+                target,
+                start_port,
+                end_port,
+                timeout,
+                threads,
+                on_progress=on_progress,
+                prefer_ipv6=prefer_ipv6,
+                protocol=scan_protocol,
+            )
+
+        for index in range(1, total_runs + 1):
+            self._events.put(("run_start", index, total_runs))
+            try:
+                report: ScanReport | DiscoveryReport = (
+                    one_discovery() if discover else one_scan()
                 )
-        except ValidationError as exc:
-            logger.error("%s", exc)
-            self._events.put(("error", str(exc)))
-            return
-        except ScannerError as exc:
-            logger.error("%s", exc)
-            self._events.put(("error", str(exc)))
-            return
-        self._events.put(("done", report))
+            except ValidationError as extra:
+                logger.error("%s", extra)
+                self._events.put(("error", str(extra)))
+                return
+            except ScannerError as extra:
+                logger.error("%s", extra)
+                self._events.put(("error", str(extra)))
+                return
+            except KeyboardInterrupt:
+                self._events.put(("error", "Scan interrupted."))
+                return
+            if previous is not None:
+                if isinstance(previous, DiscoveryReport) and isinstance(report, DiscoveryReport):
+                    appeared, disappeared = live_host_delta(previous, report)
+                    self._events.put(("delta", appeared, disappeared, True))
+                elif isinstance(previous, ScanReport) and isinstance(report, ScanReport):
+                    appeared, disappeared = open_port_delta(previous, report)
+                    self._events.put(("delta", appeared, disappeared, False))
+            previous = report
+            if index == total_runs:
+                self._events.put(("host_done" if discover else "done", report))
+                return
+            self._events.put(("snapshot", report))
+            self._events.put(("wait", interval or 0, index, total_runs))
+            time.sleep(interval or 0)
 
     def _poll_events(self) -> None:
         try:
@@ -506,11 +546,37 @@ class ScannerApp:
                 elif kind == "host_progress":
                     _name, completed, total, result = event
                     self._handle_host_progress(completed, total, result)
+                elif kind == "run_start":
+                    _name, index, total = event
+                    self._clear_table()
+                    self._open_seen = 0
+                    self._delta_note = None
+                    self.progress["value"] = 0
+                    self.status_var.set(f"Run {index}/{total}...")
+                elif kind == "snapshot":
+                    report = event[1]
+                    if isinstance(report, DiscoveryReport):
+                        self._show_discovery_report(report, finished=False)
+                    else:
+                        self._show_report(report, finished=False)
+                elif kind == "delta":
+                    _name, appeared, disappeared, is_host = event
+                    label = "up" if is_host else "open"
+                    self._delta_note = (
+                        f"Newly {label}: {len(appeared)}; gone: {len(disappeared)}"
+                    )
+                    self.status_var.set(self._delta_note)
+                elif kind == "wait":
+                    _name, wait_s, index, total = event
+                    note = f"  {self._delta_note}" if self._delta_note else ""
+                    self.status_var.set(
+                        f"Waiting {wait_s:g}s until run {index + 1}/{total}.{note}"
+                    )
                 elif kind == "done":
-                    self._show_report(event[1])
+                    self._show_report(event[1], finished=True)
                     return
                 elif kind == "host_done":
-                    self._show_discovery_report(event[1])
+                    self._show_discovery_report(event[1], finished=True)
                     return
                 elif kind == "error":
                     self._finish_with_error(event[1])
@@ -555,36 +621,42 @@ class ScannerApp:
             f"Checking {result.ip}...  {completed}/{total}  ({percent:.0f}%)"
         )
 
-    def _show_report(self, report: ScanReport) -> None:
+    def _show_report(self, report: ScanReport, *, finished: bool = True) -> None:
         self._clear_table()
         for result in report.results:
             self._insert_result(result)
         open_count = report.count(PortState.OPEN)
         self.open_count_var.set(f"Open ports: {open_count}")
         duration = f"{report.duration:.2f}s" if report.duration is not None else "?"
-        self.status_var.set(
+        status = (
             f"Done. {report.target} ({report.resolved_ip})  |  "
             f"{report.port_label()}  |  {duration}"
         )
+        if self._delta_note:
+            status = f"{status}  |  {self._delta_note}"
+        self.status_var.set(status)
         self.progress["value"] = 100
         self._last_report = report
         self.save_button.config(state="normal")
-        self.start_button.config(state="normal")
+        if finished:
+            self.start_button.config(state="normal")
 
-    def _show_discovery_report(self, report: DiscoveryReport) -> None:
+    def _show_discovery_report(self, report: DiscoveryReport, *, finished: bool = True) -> None:
         self._clear_table()
         for result in report.results:
             self._insert_host(result)
         up_count = report.count(HostState.UP)
         self.open_count_var.set(f"Live hosts: {up_count}")
         duration = f"{report.duration:.2f}s" if report.duration is not None else "?"
-        self.status_var.set(
-            f"Done. {report.spec}  |  {len(report.results)} hosts  |  {duration}"
-        )
+        status = f"Done. {report.spec}  |  {len(report.results)} hosts  |  {duration}"
+        if self._delta_note:
+            status = f"{status}  |  {self._delta_note}"
+        self.status_var.set(status)
         self.progress["value"] = 100
         self._last_report = report
         self.save_button.config(state="normal")
-        self.start_button.config(state="normal")
+        if finished:
+            self.start_button.config(state="normal")
 
     def save_html_report(self) -> None:
         if self._last_report is None:

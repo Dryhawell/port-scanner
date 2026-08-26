@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.8.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, and a parsed passive banner.
+Version **1.9.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, and a parsed passive banner. Repeats stay in the foreground (`--interval` / `--runs`).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -23,6 +23,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Passive banner grab (read only; no HTTP/SMTP/TLS probes) with ASCII and binary greeting parse
 - Per-port latency with `time.perf_counter()`
 - CLI (`argparse`) with a live progress bar, plus a dark-themed Tkinter GUI
+- Scheduled repeats in this process (`--interval` 5–86400s, `--runs` or Ctrl+C), with a diff of newly open / gone ports
 - JSON, CSV, and self-contained HTML reports under `reports/`
 - File logging to `logs/scanner.log`
 - Unit tests that mock sockets and DNS (no internet required)
@@ -66,6 +67,7 @@ python main.py --target localhost --ipv6 --ports 22,80,443
 python main.py --target 127.0.0.1 --udp --profile quick --show-closed
 python main.py --target 127.0.0.1 --discover
 python main.py --target 192.168.1.0/24 --discover --show-closed
+python main.py --target 127.0.0.1 --profile quick --interval 60 --runs 3
 ```
 
 | Flag | Meaning |
@@ -82,6 +84,8 @@ python main.py --target 192.168.1.0/24 --discover --show-closed
 | `--output` / `-o` | Report path |
 | `--format` / `-f` | `json`, `csv`, or `html` |
 | `--verbose` / `-v` | DEBUG lines on the console |
+| `--interval` | Seconds to wait between authorized repeats (`5`–`86400`). Process stays in the foreground |
+| `--runs` | How many repeats when `--interval` is set (`1`–`1000`). Omit to loop until Ctrl+C |
 | `--gui` | Open the Tkinter UI |
 
 Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. They are still stored in reports. During discovery, DOWN hosts are hidden the same way. During a CLI scan, stderr shows a live ASCII progress bar (`Progress: [########........]  50%  Found: N open ports` or `live hosts`). `--verbose` skips the bar so DEBUG lines stay readable.
@@ -103,6 +107,7 @@ python main.py --target 127.0.0.1 --udp --ports 53,123,161 --show-closed
 python main.py --target 127.0.0.1 --udp --profile quick --show-closed
 python main.py --target 127.0.0.1 --discover
 python main.py --target 192.168.1.0/24 --discover --show-closed
+python main.py --target 127.0.0.1 --profile quick --interval 60 --runs 3
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```
 
@@ -112,7 +117,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **START SCAN**. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
+Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -163,9 +168,10 @@ main.py                 entry point
 cli/interface.py        argparse, console report
 gui/app.py              Tkinter UI + background worker
 scanner/
-  validator.py          target / CIDR / ports / profiles / timeout / threads
+  validator.py          target / CIDR / ports / timeout / threads / interval
   scanner.py            TCP connect and UDP probe engine
   discover.py           TCP ping host discovery
+  compare.py            newly open / gone ports between runs
   port.py               OPEN / CLOSED / TIMEOUT
   models.py             scan and discovery report types
   service.py            getservbyport plus a small fallback map
@@ -188,6 +194,19 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner` or `disc
 4. Map the outcome to UP / DOWN, or OPEN / CLOSED / TIMEOUT.
 5. For OPEN TCP ports, look up a service name (OS table, then fallback map). If the peer speaks first, classify that greeting (ASCII or a few binary signatures). UDP OPEN ports get a table/fallback name if known; there is no TCP-style banner parse. Discovery does not grab banners.
 6. Sort results and print, export (JSON, CSV, or HTML), or show in the GUI.
+7. If `--interval` is set, wait and repeat. After the second run, print ports (or hosts) that appeared or disappeared.
+
+## Scheduled Scans
+
+`--interval` / `--runs` (and the GUI Interval / Runs fields) repeat the **same authorized scan in this process**. This is not cron, not Windows Task Scheduler, not a service, and not persistence.
+
+- Minimum wait is **5 seconds** so a typo cannot hammer a host.
+- `--runs` is required in the GUI when repeating. On the CLI, omitting `--runs` loops until Ctrl+C.
+- After run 2+, the tool diffs **currently open** ports (or **up** hosts) against the previous run.
+- Repeated `--output` files get a `_run2` suffix so they do not overwrite run 1.
+- Do not combine `--gui` with `--interval` / `--runs` on the command line; use the GUI fields instead.
+
+This is a change detector for a lab you own, not an alerting platform.
 
 ## TCP Connect Scanning
 
@@ -294,6 +313,7 @@ Tests cover validation, connect-code mapping, mocked TCP/UDP probes, mocked DNS,
 - Service names are table lookups plus a small fallback map, not protocol fingerprinting
 - Banner parsing is heuristic and passive; HTTP/TLS often send nothing until the client speaks
 - TIMEOUT vs CLOSED depends on the OS and firewall
+- Repeats run in the foreground; this is not a system scheduler or a persistence mechanism
 
 ## Authorized Use
 
@@ -311,7 +331,6 @@ Logs and reports may contain IP addresses, port numbers, and banners. Do not log
 
 ## Future Improvements
 
-- Scheduled authorized scans
 - PDF reports
 - Scan history in a database
 - Visualization

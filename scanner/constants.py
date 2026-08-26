@@ -7,13 +7,16 @@ Port ranges below are conventional IANA groupings, not proof of a service:
 """
 
 APP_NAME = "port-scanner"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 
 MIN_PORT = 1
 MAX_PORT = 65535
 DEFAULT_TIMEOUT = 0.5
 DEFAULT_MAX_WORKERS = 50
 MAX_WORKERS = 200
+MIN_INTERVAL = 5
+MAX_INTERVAL = 86400
+MAX_RUNS = 1000
 PROTOCOL_TCP = "tcp"
 PROTOCOL_UDP = "udp"
 UDP_PROBE_PAYLOAD = b"\x00"

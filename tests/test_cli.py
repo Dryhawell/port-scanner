@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from cli.interface import build_parser, render_progress_bar, run
+from scanner.models import PortScanResult, ScanReport
+from scanner.port import PortState
 
 
 def test_progress_bar_empty_and_full() -> None:
@@ -49,3 +51,61 @@ def test_run_rejects_discover_combined_with_scan_flags() -> None:
         run(["--target", "127.0.0.1", "--discover", "--ports", "80"])
     with pytest.raises(SystemExit):
         run(["--target", "127.0.0.1", "--discover", "--profile", "quick"])
+
+
+def test_parser_accepts_interval_and_runs() -> None:
+    args = build_parser().parse_args(
+        ["--target", "127.0.0.1", "--profile", "quick", "--interval", "60", "--runs", "3"]
+    )
+    assert args.interval == "60"
+    assert args.runs == "3"
+
+
+def test_run_rejects_schedule_flag_combos() -> None:
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--profile", "quick", "--runs", "3"])
+    with pytest.raises(SystemExit):
+        run(["--gui", "--interval", "60"])
+
+
+def test_scheduled_runs_sleep_and_diff(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("cli.interface.time.sleep", lambda seconds: sleeps.append(seconds))
+    reports = [
+        ScanReport(
+            target="127.0.0.1",
+            resolved_ip="127.0.0.1",
+            start_port=80,
+            end_port=443,
+            timeout=0.5,
+            results=[
+                PortScanResult(port=80, state=PortState.OPEN),
+                PortScanResult(port=443, state=PortState.CLOSED),
+            ],
+        ),
+        ScanReport(
+            target="127.0.0.1",
+            resolved_ip="127.0.0.1",
+            start_port=80,
+            end_port=443,
+            timeout=0.5,
+            results=[
+                PortScanResult(port=80, state=PortState.OPEN),
+                PortScanResult(port=443, state=PortState.OPEN),
+            ],
+        ),
+    ]
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            return reports.pop(0)
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    code = run(
+        ["--target", "127.0.0.1", "--ports", "80,443", "--interval", "5", "--runs", "2"]
+    )
+    assert code == 0
+    assert sleeps == [5]
+    output = capsys.readouterr().out
+    assert "newly open" in output
+    assert "443" in output

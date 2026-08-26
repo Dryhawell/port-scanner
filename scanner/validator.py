@@ -12,9 +12,12 @@ from typing import Final
 
 from scanner.constants import (
     MAX_DISCOVERY_HOSTS,
+    MAX_INTERVAL,
     MAX_PORT,
+    MAX_RUNS,
     MAX_WORKERS,
     MIN_DISCOVERY_PREFIX,
+    MIN_INTERVAL,
     MIN_PORT,
     PROTOCOL_TCP,
     PROTOCOL_UDP,
@@ -231,6 +234,36 @@ def validate_threads(workers: int | str) -> int:
 
     if parsed < 1 or parsed > MAX_WORKERS:
         raise ValidationError(f"Thread count must be between 1 and {MAX_WORKERS}.")
+    return parsed
+
+
+def validate_interval(value: float | int | str) -> float:
+    """Return a wait between scheduled runs, in seconds."""
+    seconds = validate_timeout(value)
+    if seconds < MIN_INTERVAL or seconds > MAX_INTERVAL:
+        raise ValidationError(
+            f"Interval must be between {MIN_INTERVAL} and {MAX_INTERVAL} seconds."
+        )
+    return seconds
+
+
+def validate_runs(value: int | str) -> int:
+    """Return how many authorized scans to run, 1-MAX_RUNS."""
+    if isinstance(value, bool) or value is None:
+        raise ValidationError(f"Run count must be between 1 and {MAX_RUNS}.")
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned.isdigit():
+            raise ValidationError(f"Run count must be between 1 and {MAX_RUNS}.")
+        parsed = int(cleaned)
+    elif isinstance(value, int):
+        parsed = value
+    else:
+        raise ValidationError(f"Run count must be between 1 and {MAX_RUNS}.")
+
+    if parsed < 1 or parsed > MAX_RUNS:
+        raise ValidationError(f"Run count must be between 1 and {MAX_RUNS}.")
     return parsed
 
 

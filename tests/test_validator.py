@@ -11,9 +11,11 @@ from scanner.validator import (
     parse_port_range,
     parse_ports,
     resolve_scan_profile,
+    validate_interval,
     validate_port,
     validate_port_range,
     validate_protocol,
+    validate_runs,
     validate_target,
     validate_threads,
     validate_timeout,
@@ -168,3 +170,17 @@ def test_timeout_and_threads() -> None:
         validate_threads(0)
     with pytest.raises(ValidationError, match="between 1 and"):
         validate_threads(201)
+
+
+def test_interval_and_runs() -> None:
+    assert validate_interval("5") == 5.0
+    assert validate_interval(60) == 60.0
+    with pytest.raises(ValidationError, match="between 5 and"):
+        validate_interval(4)
+    with pytest.raises(ValidationError, match="between 5 and"):
+        validate_interval(86401)
+    assert validate_runs("3") == 3
+    with pytest.raises(ValidationError, match="between 1 and"):
+        validate_runs(0)
+    with pytest.raises(ValidationError, match="between 1 and"):
+        validate_runs(1001)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 
 from scanner.constants import (
@@ -16,12 +17,16 @@ from scanner.constants import (
     APP_VERSION,
     DEFAULT_MAX_WORKERS,
     DEFAULT_TIMEOUT,
+    MAX_INTERVAL,
+    MAX_RUNS,
     MAX_WORKERS,
+    MIN_INTERVAL,
     PROGRESS_BAR_WIDTH,
     PROTOCOL_TCP,
     PROTOCOL_UDP,
     SCAN_PROFILES,
 )
+from scanner.compare import live_host_delta, open_port_delta
 from scanner.discover import discover_hosts
 from scanner.models import (
     DiscoveryReport,
@@ -36,6 +41,8 @@ from scanner.validator import (
     ValidationError,
     parse_ports,
     resolve_scan_profile,
+    validate_interval,
+    validate_runs,
     validate_target,
 )
 from utils.exporter import (
@@ -44,6 +51,7 @@ from utils.exporter import (
     default_output_path,
     export_report,
     infer_format,
+    path_for_run,
 )
 from utils.logger import setup_logging
 
@@ -74,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target 127.0.0.1 --udp --ports 53,123,161\n"
             "  python main.py --target 127.0.0.1 --discover\n"
             "  python main.py --target 192.168.1.0/24 --discover --show-closed\n"
+            "  python main.py --target 127.0.0.1 --profile quick --interval 60 --runs 3\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -152,6 +161,20 @@ def build_parser() -> argparse.ArgumentParser:
         "-v",
         action="store_true",
         help="Print DEBUG log lines to the console (the log file always stores DEBUG)",
+    )
+    parser.add_argument(
+        "--interval",
+        help=(
+            f"Seconds to wait between authorized repeats "
+            f"({MIN_INTERVAL}-{MAX_INTERVAL}; requires staying in the foreground)"
+        ),
+    )
+    parser.add_argument(
+        "--runs",
+        help=(
+            f"How many times to scan when --interval is set, 1-{MAX_RUNS} "
+            "(omit to repeat until Ctrl+C)"
+        ),
     )
     return parser
 
@@ -260,6 +283,8 @@ def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.gui:
+        if args.interval or args.runs:
+            parser.error("do not combine --gui with --interval or --runs")
         from gui.app import run_app
 
         return run_app()
@@ -274,11 +299,109 @@ def run(argv: list[str] | None = None) -> int:
         parser.error("use either --ports or --profile, not both")
     if not args.discover and not args.ports and not args.profile:
         parser.error("--ports, --profile, or --discover is required unless --gui is used")
+    if args.runs and not args.interval:
+        parser.error("--runs requires --interval")
 
     logger = setup_logging(verbose=args.verbose)
-    if args.discover:
-        return _run_discovery(args, logger)
+    try:
+        interval = validate_interval(args.interval) if args.interval else None
+        runs = validate_runs(args.runs) if args.runs else None
+    except ValidationError as exc:
+        return _cli_error(logger, exc)
 
+    if interval is None:
+        if args.discover:
+            code, _report = _run_discovery(args, logger)
+            return code
+        code, _report = _run_scan(args, logger)
+        return code
+    return _run_scheduled(args, logger, interval, runs)
+
+
+def _run_scheduled(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+    interval: float,
+    runs: int | None,
+) -> int:
+    print("Use this tool only on systems you are authorized to test.")
+    print(
+        "Repeating an authorized scan in this process — not a background service, "
+        "cron job, or persistence mechanism."
+    )
+    if runs is None:
+        print(f"Interval: {interval}s  (Ctrl+C to stop)")
+    else:
+        print(f"Interval: {interval}s  Runs: {runs}")
+    sys.stdout.flush()
+
+    previous: ScanReport | DiscoveryReport | None = None
+    run_index = 0
+    while True:
+        run_index += 1
+        if runs is not None:
+            print(f"--- Run {run_index}/{runs} ---")
+        else:
+            print(f"--- Run {run_index} ---")
+        sys.stdout.flush()
+        if args.discover:
+            code, report = _run_discovery(args, logger, run_index=run_index, announce=False)
+        else:
+            code, report = _run_scan(args, logger, run_index=run_index, announce=False)
+        if code != 0 or report is None:
+            return code
+        if previous is not None:
+            _print_delta(previous, report)
+        previous = report
+        if runs is not None and run_index >= runs:
+            return 0
+        print(
+            f"Waiting {interval:g}s until next run (Ctrl+C to stop).",
+            file=sys.stderr,
+        )
+        try:
+            time.sleep(interval)
+        except KeyboardInterrupt:
+            logger.warning("Schedule interrupted.")
+            print("Scan interrupted.", file=sys.stderr)
+            return 130
+
+
+def _print_delta(
+    previous: ScanReport | DiscoveryReport,
+    current: ScanReport | DiscoveryReport,
+) -> None:
+    print("Changes since last run:")
+    if isinstance(previous, DiscoveryReport) and isinstance(current, DiscoveryReport):
+        appeared, disappeared = live_host_delta(previous, current)
+        if not appeared and not disappeared:
+            print("  (none)")
+            return
+        for host in appeared:
+            print(f"  [+] {host} newly up")
+        for host in disappeared:
+            print(f"  [-] {host} no longer up")
+        return
+    if isinstance(previous, ScanReport) and isinstance(current, ScanReport):
+        appeared, disappeared = open_port_delta(previous, current)
+        if not appeared and not disappeared:
+            print("  (none)")
+            return
+        for port in appeared:
+            print(f"  [+] {port} newly open")
+        for port in disappeared:
+            print(f"  [-] {port} no longer open")
+        return
+    print("  (none)")
+
+
+def _run_scan(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+    *,
+    run_index: int = 1,
+    announce: bool = True,
+) -> tuple[int, ScanReport | None]:
     protocol = PROTOCOL_UDP if args.udp else PROTOCOL_TCP
 
     try:
@@ -289,9 +412,10 @@ def run(argv: list[str] | None = None) -> int:
             else parse_ports(args.ports)
         )
     except ValidationError as exc:
-        return _cli_error(logger, exc)
+        return _cli_error(logger, exc), None
 
-    print("Use this tool only on systems you are authorized to test.")
+    if announce:
+        print("Use this tool only on systems you are authorized to test.")
     print(f"Scanning {target}...")
     sys.stdout.flush()
 
@@ -316,31 +440,38 @@ def run(argv: list[str] | None = None) -> int:
         )
     except ValidationError as exc:
         _end_progress_line(args.verbose)
-        return _cli_error(logger, exc)
+        return _cli_error(logger, exc), None
     except ScannerError as exc:
         _end_progress_line(args.verbose)
-        return _cli_error(logger, exc)
+        return _cli_error(logger, exc), None
     except KeyboardInterrupt:
         _end_progress_line(args.verbose)
         logger.warning("Scan interrupted.")
         print("Scan interrupted.", file=sys.stderr)
-        return 130
+        return 130, None
 
     _end_progress_line(args.verbose)
     print_report(report, show_closed=args.show_closed)
 
     try:
-        saved = _maybe_export(report, args.output, args.format)
+        saved = _maybe_export(report, args.output, args.format, run_index=run_index)
     except ExportError as exc:
-        return _cli_error(logger, exc)
+        return _cli_error(logger, exc), None
 
     if saved is not None:
         print(f"Report saved: {saved}")
-    return 0
+    return 0, report
 
 
-def _run_discovery(args: argparse.Namespace, logger: logging.Logger) -> int:
-    print("Use this tool only on systems you are authorized to test.")
+def _run_discovery(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+    *,
+    run_index: int = 1,
+    announce: bool = True,
+) -> tuple[int, DiscoveryReport | None]:
+    if announce:
+        print("Use this tool only on systems you are authorized to test.")
     print(f"Discovering {args.target}...")
     sys.stdout.flush()
 
@@ -363,27 +494,27 @@ def _run_discovery(args: argparse.Namespace, logger: logging.Logger) -> int:
         )
     except ValidationError as exc:
         _end_progress_line(args.verbose)
-        return _cli_error(logger, exc)
+        return _cli_error(logger, exc), None
     except ScannerError as exc:
         _end_progress_line(args.verbose)
-        return _cli_error(logger, exc)
+        return _cli_error(logger, exc), None
     except KeyboardInterrupt:
         _end_progress_line(args.verbose)
         logger.warning("Discovery interrupted.")
         print("Scan interrupted.", file=sys.stderr)
-        return 130
+        return 130, None
 
     _end_progress_line(args.verbose)
     print_discovery_report(report, show_closed=args.show_closed)
 
     try:
-        saved = _maybe_export(report, args.output, args.format)
+        saved = _maybe_export(report, args.output, args.format, run_index=run_index)
     except ExportError as exc:
-        return _cli_error(logger, exc)
+        return _cli_error(logger, exc), None
 
     if saved is not None:
         print(f"Report saved: {saved}")
-    return 0
+    return 0, report
 
 
 def _print_discovery_progress(completed: int, total: int, live_count: int) -> None:
@@ -396,12 +527,15 @@ def _maybe_export(
     report: ScanReport | DiscoveryReport,
     output: str | None,
     fmt: str | None,
+    *,
+    run_index: int = 1,
 ) -> Path | None:
     if output is None and fmt is None:
         return None
 
     format_name = _resolve_format(output, fmt)
     path = Path(output) if output else default_output_path(format_name)
+    path = path_for_run(path, run_index)
     return export_report(report, path, format_name)
 
 

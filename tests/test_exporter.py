@@ -15,6 +15,7 @@ from utils.exporter import (
     discovery_to_dict,
     export_report,
     infer_format,
+    path_for_run,
     report_to_dict,
     report_to_html,
 )
@@ -120,3 +121,10 @@ def test_export_discovery_html(tmp_path: Path) -> None:
     assert "192.168.1.1" in text
     assert 'class="UP"' in text
     assert 'class="DOWN"' in text
+
+
+def test_path_for_run_suffix() -> None:
+    first = path_for_run("reports/scan.json", 1)
+    second = path_for_run("reports/scan.json", 2)
+    assert first.as_posix() == "reports/scan.json"
+    assert second.as_posix() == "reports/scan_run2.json"
