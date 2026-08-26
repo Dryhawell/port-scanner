@@ -1,12 +1,12 @@
 # Port Scanner
 
-Version **1.5.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a parsed passive banner.
+Version **1.6.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a parsed passive banner.
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
 ## Overview
 
-A TCP port is a numbered endpoint on a host. This scanner acts as a client: for each port it attempts a full TCP handshake. If the handshake completes, the port is **OPEN**. If the host refuses the connection, it is **CLOSED**. If nothing useful comes back before the timeout, it is **TIMEOUT** (which may be a drop, a filter, or a slow host — not a certain “filtered” verdict).
+A TCP port is a numbered endpoint on a host. This scanner can act as a TCP client (full handshake) or send a tiny UDP datagram. TCP **OPEN** means the handshake completed. TCP **CLOSED** means the host refused. UDP **OPEN** means a datagram came back. UDP **CLOSED** means ICMP port-unreachable. In both modes, **TIMEOUT** means nothing useful arrived in time — for UDP that is often open|filtered, not proof the port is down.
 
 Use it to learn sockets, timeouts, concurrency, and how service banners look on systems you are allowed to test.
 
@@ -14,8 +14,8 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 
 - IPv4, IPv6, and hostname targets (hostname syntax check, then DNS at scan time)
 - Inclusive port range `1-65535`, comma-separated lists (`22,80,443`), and named profiles (`quick`, `common`)
-- Concurrent TCP connect scan via `ThreadPoolExecutor` (default 50 workers, max 200)
-- OPEN / CLOSED / TIMEOUT classification from `connect_ex` / `SO_ERROR`
+- Concurrent TCP connect or UDP probe scan via `ThreadPoolExecutor` (default 50 workers, max 200)
+- OPEN / CLOSED / TIMEOUT from TCP `connect_ex` / `SO_ERROR`, or from UDP reply vs ICMP unreachable
 - Service-name hint with `socket.getservbyport()` (IANA/OS table, not proof of the app)
 - Passive banner grab (read only; no HTTP/SMTP probes) with light parsing (SSH, FTP, SMTP, POP3, IMAP)
 - Per-port latency with `time.perf_counter()`
@@ -60,6 +60,7 @@ python main.py --target 127.0.0.1 --ports 22,80,443
 python main.py --target 127.0.0.1 --profile quick
 python main.py --target ::1 --profile quick
 python main.py --target localhost --ipv6 --ports 22,80,443
+python main.py --target 127.0.0.1 --udp --profile quick --show-closed
 ```
 
 | Flag | Meaning |
@@ -70,6 +71,7 @@ python main.py --target localhost --ipv6 --ports 22,80,443
 | `--timeout` | Connect timeout in seconds (default `0.5`) |
 | `--threads` | Max workers, `1-200` (default `50`) |
 | `--ipv6` | Resolve hostnames to IPv6 (AAAA). Literals keep their own family |
+| `--udp` | UDP probe instead of TCP connect |
 | `--show-closed` | Print CLOSED and TIMEOUT as well as OPEN |
 | `--output` / `-o` | Report path |
 | `--format` / `-f` | `json`, `csv`, or `html` |
@@ -91,6 +93,8 @@ python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5
 python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json
 python main.py --target 127.0.0.1 --ports 22 --format csv
 python main.py --target 127.0.0.1 --profile quick --format html
+python main.py --target 127.0.0.1 --udp --ports 53,123,161 --show-closed
+python main.py --target 127.0.0.1 --udp --profile quick --show-closed
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```
 
@@ -100,7 +104,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **Prefer IPv6**, **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Product, Response Time, Banner). Quick and Common ignore the start/end fields and scan those named port sets. After a scan finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
+Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **Protocol** (TCP / UDP), **Prefer IPv6**, **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Product, Response Time, Banner). Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). After a scan finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -110,6 +114,7 @@ The scan runs on a **background thread**. Progress events go through a `queue.Qu
 Use this tool only on systems you are authorized to test.
 Scanning 127.0.0.1...
 Target: 127.0.0.1 (127.0.0.1)
+Protocol: tcp
 Ports:  1-1000
 Timeout: 0.5s
 Threads: 50
@@ -153,9 +158,9 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner`.
 
 1. Validate target, ports (range, list, or profile), timeout, and thread count.
 2. Resolve hostname to IPv4 (A) or IPv6 (AAAA) with `socket.getaddrinfo`. Literals skip DNS. Dual-stack names prefer IPv4 unless `--ipv6` / Prefer IPv6.
-3. Probe each port concurrently (bounded thread pool).
-4. Map the connect result to OPEN / CLOSED / TIMEOUT.
-5. For OPEN ports, look up a service name, read a banner if the peer speaks first, and parse that greeting.
+3. Probe each port concurrently (TCP connect or UDP datagram, bounded thread pool).
+4. Map the outcome to OPEN / CLOSED / TIMEOUT.
+5. For OPEN TCP ports, look up a service name, read a banner if the peer speaks first, and parse that greeting. UDP OPEN ports get a table name if the OS knows one; there is no TCP-style banner parse.
 6. Sort results by port number and print, export (JSON, CSV, or HTML), or show in the GUI.
 
 ## TCP Connect Scanning
@@ -171,6 +176,18 @@ On Windows, `connect_ex` often returns `WSAEWOULDBLOCK` (10035) before the hands
 `connect()` would raise on every closed port. `connect_ex()` returns an errno instead, which is a better fit for a scanner. This is a **full connect scan**, not SYN-only, not stealth, and not a firewall bypass.
 
 TIMEOUT is not a reliable IDS/firewall fingerprint.
+
+## UDP Probing
+
+UDP has no handshake. The scanner connects a datagram socket (so ICMP errors attach to it), sends a single null byte (`\x00`), and waits. No DNS/NTP/SNMP payload is crafted, and no raw sockets are required.
+
+- A UDP reply → **OPEN**
+- ICMP port-unreachable, seen as `ECONNREFUSED` / `WSAECONNRESET` (10054) → **CLOSED**
+- Silence until timeout → **TIMEOUT** (open, filtered, dropped, or ICMP rate-limited)
+
+`--profile quick` / `common` under `--udp` uses UDP-oriented ports (53, 123, 161, …), not the TCP web/SSH set. Many UDP services stay silent unless you speak their protocol, so `--show-closed` is useful. Too many parallel UDP probes can make a host rate-limit ICMP and inflate TIMEOUT.
+
+This is not a stealth scan and not an amplification attack.
 
 ## Service Detection
 
@@ -211,13 +228,16 @@ python -m pip install -r requirements.txt
 python -m pytest
 ```
 
-Tests cover validation, connect-code mapping, mocked probes, mocked DNS, service lookup, and banner parsing. They do not scan the public internet.
+Tests cover validation, connect-code mapping, mocked TCP/UDP probes, mocked DNS, service lookup, and banner parsing. They do not scan the public internet.
 
 ## Limitations
 
-- TCP only (no UDP). One address family per run (IPv4 or IPv6, not both at once)
+- One address family per run (IPv4 or IPv6, not both at once)
+- One protocol per run (TCP or UDP, not both at once)
 - IPv6 zone identifiers (`fe80::1%eth0`) are not supported
-- Connect scan only (no SYN/FIN/Xmas, no spoofing)
+- No SYN/FIN/Xmas, no spoofing, no raw ICMP sockets
+- UDP TIMEOUT is open|filtered, not a certain closed verdict
+- UDP payload is a null byte, not a protocol handshake
 - Service names are table lookups, not protocol fingerprinting
 - Banner parsing is heuristic and passive; HTTP/TLS often send nothing until the client speaks
 - TIMEOUT vs CLOSED depends on the OS and firewall
@@ -239,7 +259,6 @@ Logs and reports may contain IP addresses, port numbers, and banners. Do not log
 
 ## Future Improvements
 
-- UDP scanning
 - Advanced service detection
 - Host discovery
 - Scheduled authorized scans

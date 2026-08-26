@@ -15,6 +15,7 @@ from scanner.scanner import (
     TcpConnectScanner,
     _state_from_connect_code,
     probe_tcp_port,
+    probe_udp_port,
     resolve_host,
     resolve_ipv4,
 )
@@ -213,3 +214,75 @@ def test_scan_ipv6_literal(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report.resolved_ip == "::1"
     assert report.ip_version == 6
     assert [item.port for item in report.results] == [80]
+
+
+def test_probe_udp_reply_is_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = MagicMock()
+    sock.recv.return_value = b"\x00reply"
+    monkeypatch.setattr("scanner.scanner.socket.socket", lambda *_args, **_kwargs: sock)
+    monkeypatch.setattr(
+        "scanner.scanner.select.select",
+        lambda *_args, **_kwargs: ([sock], [], []),
+    )
+    result = probe_udp_port("127.0.0.1", 53, 0.5)
+    assert result.state is PortState.OPEN
+    assert result.protocol == "udp"
+    sock.send.assert_called()
+
+
+def test_probe_udp_icmp_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = MagicMock()
+    sock.recv.side_effect = OSError(errno.ECONNREFUSED, "refused")
+    monkeypatch.setattr("scanner.scanner.socket.socket", lambda *_args, **_kwargs: sock)
+    monkeypatch.setattr(
+        "scanner.scanner.select.select",
+        lambda *_args, **_kwargs: ([sock], [], []),
+    )
+    result = probe_udp_port("127.0.0.1", 9, 0.5)
+    assert result.state is PortState.CLOSED
+    assert result.protocol == "udp"
+
+
+def test_probe_udp_silence_is_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = MagicMock()
+    would_block = getattr(errno, "WSAEWOULDBLOCK", errno.EWOULDBLOCK)
+    sock.recv.side_effect = OSError(would_block, "would block")
+    monkeypatch.setattr("scanner.scanner.socket.socket", lambda *_args, **_kwargs: sock)
+    monkeypatch.setattr(
+        "scanner.scanner.select.select",
+        lambda *_args, **_kwargs: ([], [], []),
+    )
+    result = probe_udp_port("127.0.0.1", 53, 0.5)
+    assert result.state is PortState.TIMEOUT
+    assert result.protocol == "udp"
+
+
+def test_scan_udp_protocol(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "scanner.scanner.resolve_host",
+        lambda _target, prefer_ipv6=False: ("127.0.0.1", socket.AF_INET),
+    )
+    monkeypatch.setattr(
+        "scanner.scanner.lookup_service",
+        lambda _port, protocol="tcp": "domain" if protocol == "udp" else None,
+    )
+
+    def fake_udp(
+        _host: str,
+        port: int,
+        _timeout: float,
+        **_kwargs: object,
+    ) -> PortScanResult:
+        return PortScanResult(port=port, state=PortState.OPEN, protocol="udp")
+
+    monkeypatch.setattr("scanner.scanner.probe_udp_port", fake_udp)
+    report = TcpConnectScanner().scan(
+        "127.0.0.1",
+        53,
+        53,
+        timeout=0.5,
+        max_workers=1,
+        protocol="udp",
+    )
+    assert report.protocol == "udp"
+    assert report.open_results[0].service == "domain"

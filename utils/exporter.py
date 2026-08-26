@@ -41,10 +41,11 @@ def report_to_dict(report: ScanReport) -> dict[str, object]:
     payload: dict[str, object] = {
         "tool": APP_NAME,
         "version": APP_VERSION,
-        "scan_method": "tcp_connect",
+        "scan_method": "udp_probe" if report.protocol == "udp" else "tcp_connect",
         "target": report.target,
         "resolved_ip": report.resolved_ip,
         "ip_version": report.ip_version,
+        "protocol": report.protocol,
         "scan_time": _isoformat(report.started_at),
         "duration": _round_time(report.duration),
         "timeout": report.timeout,
@@ -161,6 +162,7 @@ def report_to_html(report: ScanReport) -> str:
         f"<div><span>Target</span><strong>{html.escape(report.target)}</strong></div>\n"
         f"<div><span>Resolved IP</span><strong>{html.escape(report.resolved_ip)}</strong></div>\n"
         f"<div><span>IP version</span><strong>IPv{report.ip_version}</strong></div>\n"
+        f"<div><span>Protocol</span><strong>{html.escape(report.protocol)}</strong></div>\n"
         f"<div><span>Ports</span><strong>{html.escape(report.port_label())}</strong></div>\n"
         f"<div><span>Scan time</span><strong>{html.escape(scan_time)}</strong></div>\n"
         f"<div><span>Duration</span><strong>{html.escape(duration)}</strong></div>\n"

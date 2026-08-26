@@ -1,6 +1,6 @@
 """Concurrent TCP connect scanner.
 
-This module performs a full TCP handshake attempt per port (connect scan).
+This module performs a TCP connect scan or a UDP probe per port.
 It does not evade firewalls, spoof packets, or scan without authorization.
 """
 
@@ -16,8 +16,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from datetime import datetime, timezone
 
-from scanner.banner import grab_banner, parse_banner
-from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
+from scanner.banner import grab_banner, parse_banner, sanitize_banner
+from scanner.constants import (
+    DEFAULT_MAX_WORKERS,
+    DEFAULT_TIMEOUT,
+    MAX_BANNER_BYTES,
+    PROTOCOL_TCP,
+    PROTOCOL_UDP,
+    UDP_PROBE_PAYLOAD,
+)
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.service import lookup_service
@@ -25,6 +32,7 @@ from scanner.validator import (
     ValidationError,
     validate_port,
     validate_port_range,
+    validate_protocol,
     validate_target,
     validate_threads,
     validate_timeout,
@@ -51,6 +59,8 @@ def _errno_set(*names: str) -> frozenset[int]:
 
 
 _REFUSED_CODES = _errno_set("ECONNREFUSED", "WSAECONNREFUSED")
+_RESET_CODES = _errno_set("ECONNRESET", "WSAECONNRESET")
+_UDP_CLOSED_CODES = _REFUSED_CODES | _RESET_CODES
 _TIMEOUT_CODES = _errno_set("ETIMEDOUT", "WSAETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH")
 _IN_PROGRESS_CODES = _errno_set(
     "EINPROGRESS",
@@ -185,15 +195,85 @@ def _connect_address(host: str, port: int, family: int) -> tuple[object, ...]:
     return (host, port)
 
 
+def probe_udp_port(
+    host: str,
+    port: int,
+    timeout: float,
+    family: int = socket.AF_INET,
+) -> PortScanResult:
+    """Send one UDP datagram and classify OPEN / CLOSED / TIMEOUT.
+
+    UDP has no handshake. A reply is OPEN. ICMP port-unreachable (surfaced
+    as ECONNREFUSED / WSAECONNRESET on a connected datagram socket) is
+    CLOSED. Silence is TIMEOUT — nmap would call that open|filtered.
+    The payload is a single null byte, not a protocol-specific probe.
+    """
+    logger.debug("UDP scanning port %s.", port)
+    started = time.perf_counter()
+    sock = socket.socket(family, socket.SOCK_DGRAM)
+    sock.setblocking(False)
+    try:
+        sock.connect(_connect_address(host, port, family))
+        sock.send(UDP_PROBE_PAYLOAD)
+        state, error_code, banner = _udp_wait(sock, timeout)
+        result = PortScanResult(
+            port=port,
+            state=state,
+            protocol=PROTOCOL_UDP,
+            error_code=error_code,
+            response_time=time.perf_counter() - started,
+            banner=banner,
+        )
+    except OSError as exc:
+        code = exc.errno
+        state = PortState.CLOSED if code in _UDP_CLOSED_CODES else PortState.TIMEOUT
+        result = _timed_result(port, state, code, started, protocol=PROTOCOL_UDP)
+    finally:
+        sock.close()
+    _log_probe_result(result)
+    return result
+
+
+def _udp_wait(
+    sock: socket.socket,
+    timeout: float,
+) -> tuple[PortState, int | None, str | None]:
+    readable, _writable, errored = select.select([sock], [], [sock], timeout)
+    if readable or errored:
+        return _udp_recv(sock)
+    return _udp_recv(sock, allow_empty=True)
+
+
+def _udp_recv(
+    sock: socket.socket,
+    *,
+    allow_empty: bool = False,
+) -> tuple[PortState, int | None, str | None]:
+    try:
+        data = sock.recv(MAX_BANNER_BYTES)
+    except OSError as exc:
+        code = exc.errno
+        if code in _UDP_CLOSED_CODES:
+            return PortState.CLOSED, code, None
+        return PortState.TIMEOUT, code, None
+    if data:
+        return PortState.OPEN, 0, sanitize_banner(data)
+    if allow_empty:
+        return PortState.TIMEOUT, None, None
+    return PortState.OPEN, 0, None
+
+
 def _timed_result(
     port: int,
     state: PortState,
     error_code: int | None,
     started: float,
+    protocol: str = PROTOCOL_TCP,
 ) -> PortScanResult:
     return PortScanResult(
         port=port,
         state=state,
+        protocol=protocol,
         error_code=error_code,
         response_time=time.perf_counter() - started,
     )
@@ -230,12 +310,14 @@ class TcpConnectScanner:
         on_progress: ProgressCallback | None = None,
         ports: Sequence[int] | None = None,
         prefer_ipv6: bool = False,
+        protocol: str = PROTOCOL_TCP,
     ) -> ScanReport:
         """Validate input, resolve DNS, then probe ports concurrently."""
         cleaned_target = validate_target(target)
         port_list = _resolve_port_list(start_port, end_port, ports)
         timeout_seconds = validate_timeout(timeout)
         requested_workers = validate_threads(max_workers)
+        scan_protocol = validate_protocol(protocol)
         resolved_ip, family = resolve_host(cleaned_target, prefer_ipv6=prefer_ipv6)
         ip_version = 6 if family == socket.AF_INET6 else 4
 
@@ -244,10 +326,11 @@ class TcpConnectScanner:
         start = port_list[0]
         end = port_list[-1]
         logger.info(
-            "Scan started. target=%s resolved_ip=%s ip_version=%s ports=%s-%s count=%s timeout=%s threads=%s",
+            "Scan started. target=%s resolved_ip=%s ip_version=%s protocol=%s ports=%s-%s count=%s timeout=%s threads=%s",
             cleaned_target,
             resolved_ip,
             ip_version,
+            scan_protocol,
             start,
             end,
             port_count,
@@ -263,6 +346,7 @@ class TcpConnectScanner:
             workers,
             on_progress,
             family,
+            scan_protocol,
         )
         duration = time.perf_counter() - started
         results.sort(key=lambda item: item.port)
@@ -278,6 +362,7 @@ class TcpConnectScanner:
             duration=duration,
             started_at=started_at,
             ip_version=ip_version,
+            protocol=scan_protocol,
         )
         open_count = report.count(PortState.OPEN)
         closed_count = report.count(PortState.CLOSED)
@@ -290,7 +375,13 @@ class TcpConnectScanner:
             duration,
         )
         if timeout_count:
-            logger.warning("Connection timeout on %s port(s).", timeout_count)
+            if scan_protocol == PROTOCOL_UDP:
+                logger.warning(
+                    "No UDP reply on %s port(s) (open|filtered, drop, or ICMP rate-limit).",
+                    timeout_count,
+                )
+            else:
+                logger.warning("Connection timeout on %s port(s).", timeout_count)
         return report
 
 
@@ -317,11 +408,13 @@ def _scan_ports_concurrently(
     workers: int,
     on_progress: ProgressCallback | None = None,
     family: int = socket.AF_INET,
+    protocol: str = PROTOCOL_TCP,
 ) -> list[PortScanResult]:
     """Submit one probe per port and collect results as they finish."""
     results: list[PortScanResult] = []
     total = len(ports)
-    probe = partial(probe_tcp_port, family=family)
+    probe_fn = probe_udp_port if protocol == PROTOCOL_UDP else probe_tcp_port
+    probe = partial(probe_fn, family=family)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(probe, host, port, timeout)

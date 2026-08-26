@@ -18,6 +18,8 @@ from scanner.constants import (
     DEFAULT_TIMEOUT,
     MAX_WORKERS,
     PROGRESS_BAR_WIDTH,
+    PROTOCOL_TCP,
+    PROTOCOL_UDP,
     SCAN_PROFILES,
 )
 from scanner.models import PortScanResult, ScanReport
@@ -49,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="main.py",
         description=(
-            "TCP connect port scanner for authorized systems only. "
+            "TCP connect or UDP probe scanner for authorized systems only. "
             "Scan localhost, your own devices, or hosts you have permission to test."
         ),
         epilog=(
@@ -62,7 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5\n"
             "  python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json\n"
             "  python main.py --target 127.0.0.1 --ports 22 --format csv\n"
-            "  python main.py --target 127.0.0.1 --profile quick --format html\n"
+            "  python main.py --target 127.0.0.1 --udp --ports 53,123,161\n"
+            "  python main.py --target 127.0.0.1 --udp --profile quick --show-closed\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -108,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--ipv6",
         action="store_true",
         help="Resolve hostnames to IPv6 (AAAA). Literals still use their own family",
+    )
+    parser.add_argument(
+        "--udp",
+        action="store_true",
+        help="UDP probe instead of TCP connect (silence is TIMEOUT / open|filtered)",
     )
     parser.add_argument(
         "--show-closed",
@@ -157,6 +165,7 @@ def print_report(report: ScanReport, *, show_closed: bool = False) -> None:
     timeout_count = report.count(PortState.TIMEOUT)
 
     print(f"Target: {report.target} ({report.resolved_ip})")
+    print(f"Protocol: {report.protocol}")
     print(f"Ports:  {report.port_label()}")
     print(f"Timeout: {report.timeout}s")
     print(f"Threads: {report.max_workers}")
@@ -214,11 +223,12 @@ def run(argv: list[str] | None = None) -> int:
         parser.error("--ports or --profile is required unless --gui is used")
 
     logger = setup_logging(verbose=args.verbose)
+    protocol = PROTOCOL_UDP if args.udp else PROTOCOL_TCP
 
     try:
         target = validate_target(args.target)
         port_list = (
-            resolve_scan_profile(args.profile)
+            resolve_scan_profile(args.profile, protocol=protocol)
             if args.profile
             else parse_ports(args.ports)
         )
@@ -246,6 +256,7 @@ def run(argv: list[str] | None = None) -> int:
             on_progress=on_progress,
             ports=port_list,
             prefer_ipv6=args.ipv6,
+            protocol=protocol,
         )
     except ValidationError as exc:
         _end_progress_line(args.verbose)

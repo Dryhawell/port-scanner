@@ -12,7 +12,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
-from scanner.constants import APP_VERSION, DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT, SCAN_PROFILES
+from scanner.constants import (
+    APP_VERSION,
+    DEFAULT_MAX_WORKERS,
+    DEFAULT_TIMEOUT,
+    PROTOCOL_UDP,
+    SCAN_PROFILES,
+    UDP_SCAN_PROFILES,
+)
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
@@ -132,6 +139,7 @@ class ScannerApp:
         self.timeout_var = tk.StringVar(value=str(DEFAULT_TIMEOUT))
         self.threads_var = tk.StringVar(value=str(DEFAULT_MAX_WORKERS))
         self.profile_var = tk.StringVar(value="Custom")
+        self.protocol_var = tk.StringVar(value="TCP")
         self.ipv6_var = tk.BooleanVar(value=False)
 
         fields = (
@@ -181,6 +189,14 @@ class ScannerApp:
             highlightthickness=0,
             font=("Segoe UI", 9),
         ).pack(anchor="w")
+        self._labeled_combo(
+            inner,
+            "Protocol",
+            self.protocol_var,
+            2,
+            1,
+            ("TCP", "UDP"),
+        )
         for index in range(4):
             inner.grid_columnconfigure(index, weight=1)
 
@@ -331,6 +347,7 @@ class ScannerApp:
         threads = self.threads_var.get()
         profile = self.profile_var.get()
         prefer_ipv6 = bool(self.ipv6_var.get())
+        protocol = self.protocol_var.get()
 
         self._clear_table()
         self._open_seen = 0
@@ -343,7 +360,7 @@ class ScannerApp:
 
         self._worker = threading.Thread(
             target=self._scan_worker,
-            args=(target, start_port, end_port, timeout, threads, profile, prefer_ipv6),
+            args=(target, start_port, end_port, timeout, threads, profile, prefer_ipv6, protocol),
             daemon=True,
             name="scan-worker",
         )
@@ -359,20 +376,24 @@ class ScannerApp:
         threads: str,
         profile: str,
         prefer_ipv6: bool,
+        protocol: str,
     ) -> None:
         def on_progress(completed: int, total: int, result: PortScanResult) -> None:
             self._events.put(("progress", completed, total, result))
 
         profile_key = profile.strip().lower()
+        scan_protocol = protocol.strip().lower()
+        profiles = UDP_SCAN_PROFILES if scan_protocol == PROTOCOL_UDP else SCAN_PROFILES
         try:
-            if profile_key in SCAN_PROFILES:
+            if profile_key in profiles:
                 report = self._scanner.scan(
                     target,
                     timeout=timeout,
                     max_workers=threads,
                     on_progress=on_progress,
-                    ports=SCAN_PROFILES[profile_key],
+                    ports=profiles[profile_key],
                     prefer_ipv6=prefer_ipv6,
+                    protocol=scan_protocol,
                 )
             else:
                 report = self._scanner.scan(
@@ -383,6 +404,7 @@ class ScannerApp:
                     threads,
                     on_progress=on_progress,
                     prefer_ipv6=prefer_ipv6,
+                    protocol=scan_protocol,
                 )
         except ValidationError as exc:
             logger.error("%s", exc)

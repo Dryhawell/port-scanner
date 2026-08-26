@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from scanner.constants import SCAN_PROFILES
+from scanner.constants import SCAN_PROFILES, UDP_SCAN_PROFILES
 from scanner.validator import (
     ValidationError,
     parse_port_range,
@@ -12,6 +12,7 @@ from scanner.validator import (
     resolve_scan_profile,
     validate_port,
     validate_port_range,
+    validate_protocol,
     validate_target,
     validate_threads,
     validate_timeout,
@@ -109,8 +110,16 @@ def test_parse_ports_rejects_empty() -> None:
 def test_resolve_scan_profile() -> None:
     assert resolve_scan_profile("quick") == list(SCAN_PROFILES["quick"])
     assert resolve_scan_profile(" COMMON ") == list(SCAN_PROFILES["common"])
+    assert resolve_scan_profile("quick", protocol="udp") == list(UDP_SCAN_PROFILES["quick"])
     with pytest.raises(ValidationError, match="Unknown scan profile"):
         resolve_scan_profile("stealth")
+
+
+def test_validate_protocol() -> None:
+    assert validate_protocol("TCP") == "tcp"
+    assert validate_protocol("udp") == "udp"
+    with pytest.raises(ValidationError, match="tcp or udp"):
+        validate_protocol("icmp")
 
 
 def test_timeout_and_threads() -> None:

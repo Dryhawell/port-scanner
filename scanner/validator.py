@@ -10,7 +10,15 @@ import ipaddress
 import re
 from typing import Final
 
-from scanner.constants import MAX_PORT, MAX_WORKERS, MIN_PORT, SCAN_PROFILES
+from scanner.constants import (
+    MAX_PORT,
+    MAX_WORKERS,
+    MIN_PORT,
+    PROTOCOL_TCP,
+    PROTOCOL_UDP,
+    SCAN_PROFILES,
+    UDP_SCAN_PROFILES,
+)
 
 # Four decimal groups, e.g. 127.0.0.1 or 999.1.1.1 (shape only, not validity).
 _IPV4_SHAPE: Final[re.Pattern[str]] = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
@@ -117,15 +125,26 @@ def parse_ports(value: str) -> list[int]:
     return sorted(set(ports))
 
 
-def resolve_scan_profile(name: str) -> list[int]:
+def resolve_scan_profile(name: str, protocol: str = PROTOCOL_TCP) -> list[int]:
     """Return the port list for a named profile (quick or common)."""
     if not isinstance(name, str) or not name.strip():
         raise ValidationError("Unknown scan profile. Use quick or common.")
     key = name.strip().lower()
-    profile = SCAN_PROFILES.get(key)
+    table = UDP_SCAN_PROFILES if protocol == PROTOCOL_UDP else SCAN_PROFILES
+    profile = table.get(key)
     if profile is None:
         raise ValidationError("Unknown scan profile. Use quick or common.")
     return list(profile)
+
+
+def validate_protocol(value: str) -> str:
+    """Return tcp or udp."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError("Protocol must be tcp or udp.")
+    cleaned = value.strip().lower()
+    if cleaned not in {PROTOCOL_TCP, PROTOCOL_UDP}:
+        raise ValidationError("Protocol must be tcp or udp.")
+    return cleaned
 
 
 def validate_timeout(timeout: float | int | str) -> float:

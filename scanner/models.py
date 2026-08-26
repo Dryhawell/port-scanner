@@ -15,7 +15,7 @@ def _utc_now() -> datetime:
 
 @dataclass(slots=True)
 class PortScanResult:
-    """Outcome of one TCP connect attempt."""
+    """Outcome of one TCP connect or UDP probe."""
 
     port: int
     state: PortState
@@ -56,6 +56,7 @@ class ScanReport:
     duration: float | None = None
     started_at: datetime = field(default_factory=_utc_now)
     ip_version: int = 4
+    protocol: str = PROTOCOL_TCP
 
     @property
     def open_results(self) -> list[PortScanResult]:
