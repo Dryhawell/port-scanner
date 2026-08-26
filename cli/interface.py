@@ -139,6 +139,9 @@ def format_result(result: PortScanResult) -> str:
     parts = [prefix, str(result.port), result.state.value]
     if result.service:
         parts.append(result.service)
+    product = result.product_label()
+    if product:
+        parts.append(product)
     latency = result.latency_label()
     if latency:
         parts.append(latency)

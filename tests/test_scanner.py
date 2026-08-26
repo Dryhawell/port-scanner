@@ -37,12 +37,16 @@ def test_probe_open_with_mock_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     sock = MagicMock()
     sock.connect_ex.return_value = 0
     monkeypatch.setattr("scanner.scanner.socket.socket", lambda *args, **kwargs: sock)
-    monkeypatch.setattr("scanner.scanner.grab_banner", lambda _sock, _timeout: "SSH-2.0-test")
+    monkeypatch.setattr("scanner.scanner.grab_banner", lambda _sock, _timeout: "SSH-2.0-OpenSSH_9.2")
 
     result = probe_tcp_port("127.0.0.1", 22, 0.5)
     assert result.state is PortState.OPEN
     assert result.port == 22
-    assert result.banner == "SSH-2.0-test"
+    assert result.banner == "SSH-2.0-OpenSSH_9.2"
+    assert result.banner_kind == "ssh"
+    assert result.banner_product == "OpenSSH"
+    assert result.banner_version == "9.2"
+    assert result.product_label() == "OpenSSH 9.2"
     assert result.response_time is not None
     sock.close.assert_called_once()
 

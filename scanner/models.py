@@ -23,6 +23,9 @@ class PortScanResult:
     service: str | None = None
     response_time: float | None = None
     banner: str | None = None
+    banner_kind: str | None = None
+    banner_product: str | None = None
+    banner_version: str | None = None
     timestamp: datetime = field(default_factory=_utc_now)
     error_code: int | None = None
 
@@ -31,6 +34,12 @@ class PortScanResult:
         if self.response_time is None:
             return None
         return f"{self.response_time * 1000:.1f}ms"
+
+    def product_label(self) -> str | None:
+        """Return product and version from the banner, or the product alone."""
+        if self.banner_product and self.banner_version:
+            return f"{self.banner_product} {self.banner_version}"
+        return self.banner_product
 
 
 @dataclass(slots=True)

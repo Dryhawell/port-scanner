@@ -32,7 +32,7 @@ TIMEOUT = "#d29922"
 ENTRY_BG = "#21262d"
 BUTTON_BG = "#238636"
 BUTTON_FG = "#ffffff"
-COLUMNS = ("port", "state", "protocol", "service", "response_time", "banner")
+COLUMNS = ("port", "state", "protocol", "service", "product", "response_time", "banner")
 POLL_MS = 50
 
 
@@ -50,7 +50,7 @@ class ScannerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(f"Port Scanner {APP_VERSION}")
-        self.root.geometry("980x640")
+        self.root.geometry("1040x640")
         self.root.minsize(820, 520)
         self.root.configure(bg=BG)
         self._scanner = TcpConnectScanner()
@@ -255,16 +255,18 @@ class ScannerApp:
             "state": "State",
             "protocol": "Protocol",
             "service": "Service",
+            "product": "Product",
             "response_time": "Response Time",
             "banner": "Banner",
         }
         widths = {
-            "port": 80,
-            "state": 100,
-            "protocol": 90,
-            "service": 110,
-            "response_time": 130,
-            "banner": 320,
+            "port": 70,
+            "state": 90,
+            "protocol": 80,
+            "service": 90,
+            "product": 140,
+            "response_time": 120,
+            "banner": 280,
         }
         for key, title in headings.items():
             self.table.heading(key, text=title, anchor="w")
@@ -473,6 +475,7 @@ class ScannerApp:
                 result.state.value,
                 result.protocol,
                 result.service or "",
+                result.product_label() or "",
                 result.latency_label() or "",
                 result.banner or "",
             ),

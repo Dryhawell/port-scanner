@@ -1,6 +1,6 @@
 """TCP connect scan engine: validation, probing, service hints, and banners."""
 
-from scanner.banner import grab_banner, sanitize_banner
+from scanner.banner import BannerHint, grab_banner, parse_banner, sanitize_banner
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner, probe_tcp_port, resolve_host, resolve_ipv4
@@ -18,6 +18,7 @@ from scanner.validator import (
 )
 
 __all__ = [
+    "BannerHint",
     "PortScanResult",
     "PortState",
     "ScanReport",
@@ -26,6 +27,7 @@ __all__ = [
     "ValidationError",
     "grab_banner",
     "lookup_service",
+    "parse_banner",
     "parse_port_range",
     "parse_ports",
     "probe_tcp_port",

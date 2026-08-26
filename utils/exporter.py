@@ -119,7 +119,7 @@ def _write_json(report: ScanReport, path: Path) -> None:
 
 
 def _write_csv(report: ScanReport, path: Path) -> None:
-    fieldnames = ("port", "state", "protocol", "service", "response_time", "banner")
+    fieldnames = ("port", "state", "protocol", "service", "product", "version", "response_time", "banner")
     try:
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -141,7 +141,7 @@ def report_to_html(report: ScanReport) -> str:
     rows = "\n".join(_html_result_row(item) for item in report.results)
     if not rows:
         rows = (
-            '<tr><td colspan="6" class="empty">No ports in this report.</td></tr>'
+            '<tr><td colspan="7" class="empty">No ports in this report.</td></tr>'
         )
     return (
         "<!DOCTYPE html>\n"
@@ -177,7 +177,7 @@ def report_to_html(report: ScanReport) -> str:
         "<table>\n"
         "<thead><tr>"
         "<th>Port</th><th>State</th><th>Protocol</th>"
-        "<th>Service</th><th>Response</th><th>Banner</th>"
+        "<th>Service</th><th>Product</th><th>Response</th><th>Banner</th>"
         "</tr></thead>\n"
         f"<tbody>\n{rows}\n</tbody>\n"
         "</table>\n"
@@ -198,6 +198,7 @@ def _write_html(report: ScanReport, path: Path) -> None:
 def _html_result_row(result: PortScanResult) -> str:
     latency = result.latency_label() or "—"
     service = result.service or "—"
+    product = result.product_label() or "—"
     banner = result.banner or "—"
     state = result.state.value
     return (
@@ -206,6 +207,7 @@ def _html_result_row(result: PortScanResult) -> str:
         f"<td>{html.escape(state)}</td>"
         f"<td>{html.escape(result.protocol)}</td>"
         f"<td>{html.escape(service)}</td>"
+        f"<td>{html.escape(product)}</td>"
         f"<td>{html.escape(latency)}</td>"
         f"<td class=\"banner\">{html.escape(banner)}</td>"
         "</tr>"
@@ -244,6 +246,9 @@ def _result_to_dict(result: PortScanResult) -> dict[str, object]:
         "state": result.state.value,
         "protocol": result.protocol,
         "service": result.service,
+        "banner_kind": result.banner_kind,
+        "banner_product": result.banner_product,
+        "banner_version": result.banner_version,
         "response_time": _round_time(result.response_time),
         "banner": result.banner,
         "timestamp": _isoformat(result.timestamp),
@@ -257,6 +262,8 @@ def _result_to_csv_row(result: PortScanResult) -> dict[str, object]:
         "state": result.state.value,
         "protocol": result.protocol,
         "service": result.service or "",
+        "product": result.banner_product or "",
+        "version": result.banner_version or "",
         "response_time": "" if response is None else response,
         "banner": result.banner or "",
     }

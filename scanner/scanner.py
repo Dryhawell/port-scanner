@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from datetime import datetime, timezone
 
-from scanner.banner import grab_banner
+from scanner.banner import grab_banner, parse_banner
 from scanner.constants import DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
@@ -156,12 +156,16 @@ def probe_tcp_port(
             error_code = _wait_for_connect(sock, timeout)
         state = _state_from_connect_code(error_code)
         banner = grab_banner(sock, timeout) if state is PortState.OPEN else None
+        hint = parse_banner(banner)
         result = PortScanResult(
             port=port,
             state=state,
             error_code=error_code,
             response_time=time.perf_counter() - started,
             banner=banner,
+            banner_kind=hint.kind,
+            banner_product=hint.product,
+            banner_version=hint.version,
         )
     except socket.timeout:
         result = _timed_result(port, PortState.TIMEOUT, None, started)
@@ -333,9 +337,16 @@ def _scan_ports_concurrently(
 
 
 def _apply_service_hint(result: PortScanResult) -> None:
-    """Fill the IANA/OS service name on open ports only."""
-    if result.state is PortState.OPEN:
-        result.service = lookup_service(result.port, result.protocol)
+    """Fill the IANA/OS service name on open ports only.
+
+    If the services table has no name, reuse the banner kind (ssh, ftp, …).
+    A table name is never overwritten: a mismatch with the banner is useful.
+    """
+    if result.state is not PortState.OPEN:
+        return
+    result.service = lookup_service(result.port, result.protocol)
+    if result.service is None and result.banner_kind:
+        result.service = result.banner_kind
 
 
 def _log_probe_result(result: PortScanResult) -> None:

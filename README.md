@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.4.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
+Version **1.5.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a parsed passive banner.
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -17,7 +17,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Concurrent TCP connect scan via `ThreadPoolExecutor` (default 50 workers, max 200)
 - OPEN / CLOSED / TIMEOUT classification from `connect_ex` / `SO_ERROR`
 - Service-name hint with `socket.getservbyport()` (IANA/OS table, not proof of the app)
-- Passive banner grab (read only; no HTTP/SMTP probes)
+- Passive banner grab (read only; no HTTP/SMTP probes) with light parsing (SSH, FTP, SMTP, POP3, IMAP)
 - Per-port latency with `time.perf_counter()`
 - CLI (`argparse`) with a live progress bar, plus a dark-themed Tkinter GUI
 - JSON, CSV, and self-contained HTML reports under `reports/`
@@ -100,7 +100,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **Prefer IPv6**, **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Response Time, Banner). Quick and Common ignore the start/end fields and scan those named port sets. After a scan finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
+Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **Prefer IPv6**, **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Product, Response Time, Banner). Quick and Common ignore the start/end fields and scan those named port sets. After a scan finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -116,7 +116,7 @@ Threads: 50
 Duration: 1.25s
 Scanned: 1000 ports (open=3, closed=0, timeout=997)
 
-[+] 22 OPEN ssh 12.3ms SSH-2.0-OpenSSH_9.2
+[+] 22 OPEN ssh OpenSSH 9.2 12.3ms SSH-2.0-OpenSSH_9.2
 [+] 80 OPEN http 4.1ms
 [+] 443 OPEN https 8.0ms
 
@@ -138,7 +138,7 @@ scanner/
   port.py               OPEN / CLOSED / TIMEOUT
   models.py             PortScanResult, ScanReport
   service.py            getservbyport hint
-  banner.py             passive recv + sanitize
+  banner.py             passive recv, sanitize, parse
 utils/
   exporter.py           JSON / CSV / HTML
   logger.py             logs/scanner.log
@@ -155,7 +155,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner`.
 2. Resolve hostname to IPv4 (A) or IPv6 (AAAA) with `socket.getaddrinfo`. Literals skip DNS. Dual-stack names prefer IPv4 unless `--ipv6` / Prefer IPv6.
 3. Probe each port concurrently (bounded thread pool).
 4. Map the connect result to OPEN / CLOSED / TIMEOUT.
-5. For OPEN ports, look up a service name and optionally read a banner.
+5. For OPEN ports, look up a service name, read a banner if the peer speaks first, and parse that greeting.
 6. Sort results by port number and print, export (JSON, CSV, or HTML), or show in the GUI.
 
 ## TCP Connect Scanning
@@ -180,6 +180,24 @@ Examples: `22 → ssh`, `80 → http`, `443 → https`, `25 → smtp`, `53 → d
 
 A name is a **convention**, not proof that that daemon is running. Anything can listen on port 80.
 
+## Banner Parsing
+
+After the TCP handshake, the scanner **only reads**. It does not send `GET /`, `EHLO`, or a TLS ClientHello. SSH, FTP, SMTP, POP3, and IMAP often greet first; HTTP and TLS usually do not.
+
+`parse_banner()` then classifies that text:
+
+| Greeting | Kind | Example product |
+|---|---|---|
+| `SSH-2.0-OpenSSH_9.2` | ssh | OpenSSH 9.2 |
+| `220 (vsFTPd 3.0.3)` | ftp | vsftpd 3.0.3 |
+| `220 host ESMTP Postfix` | smtp | Postfix |
+| `+OK Dovecot ready` | pop3 | Dovecot |
+| `* OK ... Dovecot ready` | imap | Dovecot |
+
+A 220 line without FTP or SMTP keywords is left unclassified. The raw banner stays in reports as evidence. If the OS services table has no name, the banner kind may fill `service`; a table name is never overwritten, so a mismatch (port 80 + SSH banner) stays visible.
+
+This is not fingerprinting and not a CVE lookup.
+
 ## Performance
 
 Port scanning is I/O-bound: workers wait on the network, they do not burn CPU. `ThreadPoolExecutor` overlaps those waits. Too many threads can slow this machine, load the target, and increase timeouts. The cap is 200.
@@ -193,7 +211,7 @@ python -m pip install -r requirements.txt
 python -m pytest
 ```
 
-Tests cover validation, connect-code mapping, mocked probes, mocked DNS, and service lookup. They do not scan the public internet.
+Tests cover validation, connect-code mapping, mocked probes, mocked DNS, service lookup, and banner parsing. They do not scan the public internet.
 
 ## Limitations
 
@@ -201,7 +219,7 @@ Tests cover validation, connect-code mapping, mocked probes, mocked DNS, and ser
 - IPv6 zone identifiers (`fe80::1%eth0`) are not supported
 - Connect scan only (no SYN/FIN/Xmas, no spoofing)
 - Service names are table lookups, not protocol fingerprinting
-- Banners are passive; HTTP/TLS often send nothing until the client speaks
+- Banner parsing is heuristic and passive; HTTP/TLS often send nothing until the client speaks
 - TIMEOUT vs CLOSED depends on the OS and firewall
 - One target per run; no host discovery
 
@@ -223,7 +241,6 @@ Logs and reports may contain IP addresses, port numbers, and banners. Do not log
 
 - UDP scanning
 - Advanced service detection
-- Better banner parsing
 - Host discovery
 - Scheduled authorized scans
 - PDF reports

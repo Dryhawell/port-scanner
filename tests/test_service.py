@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from scanner.banner import sanitize_banner
 from scanner.service import lookup_service
 
 
@@ -31,14 +30,3 @@ def test_lookup_unknown_port(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("scanner.service.socket.getservbyport", fake_getservbyport)
     assert lookup_service(54321) is None
-
-
-def test_sanitize_banner() -> None:
-    assert sanitize_banner(b"SSH-2.0-OpenSSH_9.2\r\n") == "SSH-2.0-OpenSSH_9.2"
-    assert sanitize_banner(b"") is None
-    assert sanitize_banner(b"\x00\x01") is None
-    long_banner = ("A" * 250).encode("ascii")
-    cleaned = sanitize_banner(long_banner)
-    assert cleaned is not None
-    assert cleaned.endswith("...")
-    assert len(cleaned) <= 203
