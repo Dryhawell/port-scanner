@@ -44,6 +44,7 @@ def report_to_dict(report: ScanReport) -> dict[str, object]:
         "scan_method": "tcp_connect",
         "target": report.target,
         "resolved_ip": report.resolved_ip,
+        "ip_version": report.ip_version,
         "scan_time": _isoformat(report.started_at),
         "duration": _round_time(report.duration),
         "timeout": report.timeout,
@@ -159,6 +160,7 @@ def report_to_html(report: ScanReport) -> str:
         "<section class=\"meta\">\n"
         f"<div><span>Target</span><strong>{html.escape(report.target)}</strong></div>\n"
         f"<div><span>Resolved IP</span><strong>{html.escape(report.resolved_ip)}</strong></div>\n"
+        f"<div><span>IP version</span><strong>IPv{report.ip_version}</strong></div>\n"
         f"<div><span>Ports</span><strong>{html.escape(report.port_label())}</strong></div>\n"
         f"<div><span>Scan time</span><strong>{html.escape(scan_time)}</strong></div>\n"
         f"<div><span>Duration</span><strong>{html.escape(duration)}</strong></div>\n"

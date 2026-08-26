@@ -41,10 +41,24 @@ def test_invalid_hostname() -> None:
         validate_target("")
     with pytest.raises(ValidationError, match="Invalid target"):
         validate_target("http://example.com")
-    with pytest.raises(ValidationError, match="IPv6"):
-        validate_target("::1")
     with pytest.raises(ValidationError, match="Invalid hostname"):
         validate_target("-bad.example.com")
+
+
+def test_valid_ipv6() -> None:
+    assert validate_target("::1") == "::1"
+    assert validate_target("[::1]") == "::1"
+    assert validate_target("2001:db8::1") == "2001:db8::1"
+    assert validate_target(" 2001:0DB8:0000::1 ") == "2001:db8::1"
+
+
+def test_invalid_ipv6() -> None:
+    with pytest.raises(ValidationError, match="Invalid IP address"):
+        validate_target("gggg::1")
+    with pytest.raises(ValidationError, match="Invalid IP address"):
+        validate_target("[::1]:80")
+    with pytest.raises(ValidationError, match="zone identifiers"):
+        validate_target("fe80::1%eth0")
 
 
 def test_invalid_port() -> None:

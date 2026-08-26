@@ -7,11 +7,13 @@ It does not evade firewalls, spoof packets, or scan without authorization.
 from __future__ import annotations
 
 import errno
+import ipaddress
 import select
 import socket
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from datetime import datetime, timezone
 
 from scanner.banner import grab_banner
@@ -60,28 +62,80 @@ _IN_PROGRESS_CODES = _errno_set(
 # Windows often returns WSAEWOULDBLOCK (10035) before the handshake finishes.
 
 
-def resolve_ipv4(target: str) -> str:
-    """Resolve a validated hostname or IPv4 literal to an IPv4 address."""
+def resolve_host(target: str, *, prefer_ipv6: bool = False) -> tuple[str, int]:
+    """Resolve a validated target to (ip, address family).
+
+    IPv4 and IPv6 literals skip DNS. Hostnames use getaddrinfo. Dual-stack
+    names prefer A/IPv4 unless prefer_ipv6 is True (then AAAA/IPv6 only).
+    """
     cleaned = validate_target(target)
+    literal_version = _literal_ip_version(cleaned)
+    if literal_version == 4:
+        return cleaned, socket.AF_INET
+    if literal_version == 6:
+        return cleaned, socket.AF_INET6
+
+    family = socket.AF_INET6 if prefer_ipv6 else socket.AF_UNSPEC
     try:
         infos = socket.getaddrinfo(
             cleaned,
             None,
-            family=socket.AF_INET,
+            family=family,
             type=socket.SOCK_STREAM,
         )
     except socket.gaierror as exc:
-        logger.error("Could not resolve hostname: %s", cleaned)
+        kind = "IPv6" if prefer_ipv6 else "hostname"
+        logger.error("Could not resolve %s: %s", kind, cleaned)
         raise ScannerError(f"Could not resolve hostname: {cleaned}") from exc
 
     if not infos:
         raise ScannerError(f"Could not resolve hostname: {cleaned}")
 
-    ipv4 = infos[0][4][0]
-    return ipv4
+    chosen_family, ip = _pick_addrinfo(infos, prefer_ipv6=prefer_ipv6)
+    return ip, chosen_family
 
 
-def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
+def resolve_ipv4(target: str) -> str:
+    """Resolve a validated hostname or IPv4 literal to an IPv4 address."""
+    ip, family = resolve_host(target, prefer_ipv6=False)
+    if family != socket.AF_INET:
+        cleaned = validate_target(target)
+        raise ScannerError(f"Could not resolve hostname to IPv4: {cleaned}")
+    return ip
+
+
+def _literal_ip_version(value: str) -> int | None:
+    try:
+        ipaddress.IPv4Address(value)
+        return 4
+    except ipaddress.AddressValueError:
+        pass
+    try:
+        ipaddress.IPv6Address(value)
+        return 6
+    except ipaddress.AddressValueError:
+        return None
+
+
+def _pick_addrinfo(
+    infos: Sequence[tuple[object, ...]],
+    *,
+    prefer_ipv6: bool,
+) -> tuple[int, str]:
+    preferred = socket.AF_INET6 if prefer_ipv6 else socket.AF_INET
+    for family, _socktype, _proto, _canon, sockaddr in infos:
+        if family == preferred and sockaddr:
+            return int(family), str(sockaddr[0])
+    family, _socktype, _proto, _canon, sockaddr = infos[0]
+    return int(family), str(sockaddr[0])
+
+
+def probe_tcp_port(
+    host: str,
+    port: int,
+    timeout: float,
+    family: int = socket.AF_INET,
+) -> PortScanResult:
     """Try one TCP connect and map the outcome to OPEN / CLOSED / TIMEOUT.
 
     connect_ex returns 0 on success (the port accepted the handshake).
@@ -90,13 +144,14 @@ def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
     The socket is non-blocking so Windows does not stack settimeout() plus
     select() into a double wait. The user timeout is enforced by select().
     response_time is the probe duration in seconds (perf_counter).
+    IPv6 uses AF_INET6 and a 4-tuple address (host, port, flowinfo, scopeid).
     """
     logger.debug("Scanning port %s.", port)
     started = time.perf_counter()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock = socket.socket(family, socket.SOCK_STREAM)
     sock.setblocking(False)
     try:
-        error_code = sock.connect_ex((host, port))
+        error_code = sock.connect_ex(_connect_address(host, port, family))
         if error_code in _IN_PROGRESS_CODES:
             error_code = _wait_for_connect(sock, timeout)
         state = _state_from_connect_code(error_code)
@@ -118,6 +173,12 @@ def probe_tcp_port(host: str, port: int, timeout: float) -> PortScanResult:
         sock.close()
     _log_probe_result(result)
     return result
+
+
+def _connect_address(host: str, port: int, family: int) -> tuple[object, ...]:
+    if family == socket.AF_INET6:
+        return (host, port, 0, 0)
+    return (host, port)
 
 
 def _timed_result(
@@ -153,7 +214,7 @@ def _state_from_connect_code(error_code: int) -> PortState:
 
 
 class TcpConnectScanner:
-    """Scan a port range on one IPv4 host using a bounded thread pool."""
+    """Scan a port range on one IPv4 or IPv6 host using a bounded thread pool."""
 
     def scan(
         self,
@@ -164,22 +225,25 @@ class TcpConnectScanner:
         max_workers: int | str = DEFAULT_MAX_WORKERS,
         on_progress: ProgressCallback | None = None,
         ports: Sequence[int] | None = None,
+        prefer_ipv6: bool = False,
     ) -> ScanReport:
         """Validate input, resolve DNS, then probe ports concurrently."""
         cleaned_target = validate_target(target)
         port_list = _resolve_port_list(start_port, end_port, ports)
         timeout_seconds = validate_timeout(timeout)
         requested_workers = validate_threads(max_workers)
-        resolved_ip = resolve_ipv4(cleaned_target)
+        resolved_ip, family = resolve_host(cleaned_target, prefer_ipv6=prefer_ipv6)
+        ip_version = 6 if family == socket.AF_INET6 else 4
 
         port_count = len(port_list)
         workers = min(requested_workers, port_count)
         start = port_list[0]
         end = port_list[-1]
         logger.info(
-            "Scan started. target=%s resolved_ip=%s ports=%s-%s count=%s timeout=%s threads=%s",
+            "Scan started. target=%s resolved_ip=%s ip_version=%s ports=%s-%s count=%s timeout=%s threads=%s",
             cleaned_target,
             resolved_ip,
+            ip_version,
             start,
             end,
             port_count,
@@ -194,6 +258,7 @@ class TcpConnectScanner:
             timeout_seconds,
             workers,
             on_progress,
+            family,
         )
         duration = time.perf_counter() - started
         results.sort(key=lambda item: item.port)
@@ -208,6 +273,7 @@ class TcpConnectScanner:
             max_workers=workers,
             duration=duration,
             started_at=started_at,
+            ip_version=ip_version,
         )
         open_count = report.count(PortState.OPEN)
         closed_count = report.count(PortState.CLOSED)
@@ -246,13 +312,15 @@ def _scan_ports_concurrently(
     timeout: float,
     workers: int,
     on_progress: ProgressCallback | None = None,
+    family: int = socket.AF_INET,
 ) -> list[PortScanResult]:
     """Submit one probe per port and collect results as they finish."""
     results: list[PortScanResult] = []
     total = len(ports)
+    probe = partial(probe_tcp_port, family=family)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
-            executor.submit(probe_tcp_port, host, port, timeout)
+            executor.submit(probe, host, port, timeout)
             for port in ports
         ]
         for completed, future in enumerate(as_completed(futures), start=1):

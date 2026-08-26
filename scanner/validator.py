@@ -29,10 +29,11 @@ class ValidationError(ValueError):
 
 
 def validate_target(target: str) -> str:
-    """Return a stripped IPv4 address or hostname if the target is usable.
+    """Return a stripped IPv4/IPv6 address or hostname if the target is usable.
 
     A value that *looks* like IPv4 (four dotted numbers) is validated only as
     IPv4, so 999.1.1.1 is rejected instead of being treated as a hostname.
+    Values with a colon are treated as IPv6 (including bracketed [::1]).
     Hostname checks are syntactic; DNS resolution happens later, during scan.
     """
     if not isinstance(target, str):
@@ -45,11 +46,13 @@ def validate_target(target: str) -> str:
     if "://" in cleaned or "/" in cleaned or " " in cleaned:
         raise ValidationError("Invalid target.")
 
-    if ":" in cleaned:
-        raise ValidationError("IPv6 is not supported yet.")
+    cleaned = _unwrap_ipv6_brackets(cleaned)
 
     if _IPV4_SHAPE.fullmatch(cleaned):
         return _validate_ipv4(cleaned)
+
+    if ":" in cleaned:
+        return _validate_ipv6(cleaned)
 
     return _validate_hostname(cleaned)
 
@@ -167,9 +170,31 @@ def validate_threads(workers: int | str) -> int:
     return parsed
 
 
+def _unwrap_ipv6_brackets(value: str) -> str:
+    """Accept RFC 3986 [::1]; reject mixed forms such as [::1]:80."""
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        if not inner or ":" not in inner:
+            raise ValidationError("Invalid IP address.")
+        return inner
+    if "[" in value or "]" in value:
+        raise ValidationError("Invalid IP address.")
+    return value
+
+
 def _validate_ipv4(value: str) -> str:
     try:
         address = ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError as exc:
+        raise ValidationError("Invalid IP address.") from exc
+    return str(address)
+
+
+def _validate_ipv6(value: str) -> str:
+    if "%" in value:
+        raise ValidationError("IPv6 zone identifiers are not supported.")
+    try:
+        address = ipaddress.IPv6Address(value)
     except ipaddress.AddressValueError as exc:
         raise ValidationError("Invalid IP address.") from exc
     return str(address)

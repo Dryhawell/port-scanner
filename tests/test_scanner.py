@@ -15,6 +15,7 @@ from scanner.scanner import (
     TcpConnectScanner,
     _state_from_connect_code,
     probe_tcp_port,
+    resolve_host,
     resolve_ipv4,
 )
 
@@ -67,7 +68,7 @@ def test_probe_timeout_with_mock_socket(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_resolve_ipv4_uses_getaddrinfo(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_info = [(None, None, None, None, ("127.0.0.1", 0))]
+    fake_info = [(socket.AF_INET, None, None, None, ("127.0.0.1", 0))]
     monkeypatch.setattr("scanner.scanner.socket.getaddrinfo", lambda *args, **kwargs: fake_info)
     assert resolve_ipv4("localhost") == "127.0.0.1"
 
@@ -81,11 +82,70 @@ def test_resolve_ipv4_dns_failure(monkeypatch: pytest.MonkeyPatch) -> None:
         resolve_ipv4("no-such-host.invalid")
 
 
+def test_resolve_host_skips_dns_for_literals(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*_args: object, **_kwargs: object) -> list[object]:
+        raise AssertionError("literals must not call DNS")
+
+    monkeypatch.setattr("scanner.scanner.socket.getaddrinfo", fail)
+    ip4, family4 = resolve_host("127.0.0.1")
+    assert ip4 == "127.0.0.1"
+    assert family4 == socket.AF_INET
+    ip6, family6 = resolve_host("::1")
+    assert ip6 == "::1"
+    assert family6 == socket.AF_INET6
+
+
+def test_resolve_host_prefers_ipv4_then_ipv6(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_info = [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", 0, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
+    ]
+
+    def fake_getaddrinfo(_host: str, _port: object, family: int = 0, **_kwargs: object) -> list[object]:
+        if family == socket.AF_INET6:
+            return [fake_info[0]]
+        return fake_info
+
+    monkeypatch.setattr("scanner.scanner.socket.getaddrinfo", fake_getaddrinfo)
+    ip, family = resolve_host("localhost")
+    assert ip == "127.0.0.1"
+    assert family == socket.AF_INET
+    ip6, family6 = resolve_host("localhost", prefer_ipv6=True)
+    assert ip6 == "::1"
+    assert family6 == socket.AF_INET6
+
+
+def test_probe_ipv6_uses_inet6_tuple(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = MagicMock()
+    sock.connect_ex.return_value = 0
+    families: list[int] = []
+
+    def fake_socket(family: int, *_args: object, **_kwargs: object) -> MagicMock:
+        families.append(family)
+        return sock
+
+    monkeypatch.setattr("scanner.scanner.socket.socket", fake_socket)
+    monkeypatch.setattr("scanner.scanner.grab_banner", lambda _sock, _timeout: None)
+
+    result = probe_tcp_port("::1", 80, 0.5, family=socket.AF_INET6)
+    assert result.state is PortState.OPEN
+    assert families == [socket.AF_INET6]
+    sock.connect_ex.assert_called_once_with(("::1", 80, 0, 0))
+
+
 def test_scan_collects_sorted_results(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("scanner.scanner.resolve_ipv4", lambda _target: "127.0.0.1")
+    monkeypatch.setattr(
+        "scanner.scanner.resolve_host",
+        lambda _target, prefer_ipv6=False: ("127.0.0.1", socket.AF_INET),
+    )
     monkeypatch.setattr("scanner.scanner.lookup_service", lambda port, _protocol="tcp": "http" if port == 80 else None)
 
-    def fake_probe(_host: str, port: int, _timeout: float) -> PortScanResult:
+    def fake_probe(
+        _host: str,
+        port: int,
+        _timeout: float,
+        **_kwargs: object,
+    ) -> PortScanResult:
         state = PortState.OPEN if port == 80 else PortState.CLOSED
         return PortScanResult(port=port, state=state, response_time=0.01)
 
@@ -97,14 +157,23 @@ def test_scan_collects_sorted_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report.open_results[0].service == "http"
     assert report.count(PortState.CLOSED) == 2
     assert report.resolved_ip == "127.0.0.1"
+    assert report.ip_version == 4
     assert report.duration is not None
 
 
 def test_scan_accepts_explicit_port_list(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("scanner.scanner.resolve_ipv4", lambda _target: "127.0.0.1")
+    monkeypatch.setattr(
+        "scanner.scanner.resolve_host",
+        lambda _target, prefer_ipv6=False: ("127.0.0.1", socket.AF_INET),
+    )
     monkeypatch.setattr("scanner.scanner.lookup_service", lambda _port, _protocol="tcp": None)
 
-    def fake_probe(_host: str, port: int, _timeout: float) -> PortScanResult:
+    def fake_probe(
+        _host: str,
+        port: int,
+        _timeout: float,
+        **_kwargs: object,
+    ) -> PortScanResult:
         return PortScanResult(port=port, state=PortState.CLOSED)
 
     monkeypatch.setattr("scanner.scanner.probe_tcp_port", fake_probe)
@@ -117,3 +186,26 @@ def test_scan_accepts_explicit_port_list(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert [item.port for item in report.results] == [80, 443]
     assert report.port_label() == "80,443"
+
+
+def test_scan_ipv6_literal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "scanner.scanner.resolve_host",
+        lambda _target, prefer_ipv6=False: ("::1", socket.AF_INET6),
+    )
+    monkeypatch.setattr("scanner.scanner.lookup_service", lambda _port, _protocol="tcp": None)
+
+    def fake_probe(
+        _host: str,
+        port: int,
+        _timeout: float,
+        **_kwargs: object,
+    ) -> PortScanResult:
+        return PortScanResult(port=port, state=PortState.CLOSED)
+
+    monkeypatch.setattr("scanner.scanner.probe_tcp_port", fake_probe)
+    report = TcpConnectScanner().scan("::1", 80, 80, timeout=0.5, max_workers=1)
+
+    assert report.resolved_ip == "::1"
+    assert report.ip_version == 6
+    assert [item.port for item in report.results] == [80]

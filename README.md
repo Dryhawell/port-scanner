@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.3.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
+Version **1.4.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -12,7 +12,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 
 ## Features
 
-- IPv4 address and hostname targets (hostname syntax check, then DNS at scan time)
+- IPv4, IPv6, and hostname targets (hostname syntax check, then DNS at scan time)
 - Inclusive port range `1-65535`, comma-separated lists (`22,80,443`), and named profiles (`quick`, `common`)
 - Concurrent TCP connect scan via `ThreadPoolExecutor` (default 50 workers, max 200)
 - OPEN / CLOSED / TIMEOUT classification from `connect_ex` / `SO_ERROR`
@@ -58,15 +58,18 @@ python main.py --gui
 python main.py --target 127.0.0.1 --ports 1-1000
 python main.py --target 127.0.0.1 --ports 22,80,443
 python main.py --target 127.0.0.1 --profile quick
+python main.py --target ::1 --profile quick
+python main.py --target localhost --ipv6 --ports 22,80,443
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--target` / `-t` | IPv4 or hostname (required for CLI) |
+| `--target` / `-t` | IPv4, IPv6, or hostname (required for CLI) |
 | `--ports` / `-p` | `80`, `1-1000`, or `22,80,443` (required unless `--profile`) |
 | `--profile` | Named port set: `quick` or `common` (instead of `--ports`) |
 | `--timeout` | Connect timeout in seconds (default `0.5`) |
 | `--threads` | Max workers, `1-200` (default `50`) |
+| `--ipv6` | Resolve hostnames to IPv6 (AAAA). Literals keep their own family |
 | `--show-closed` | Print CLOSED and TIMEOUT as well as OPEN |
 | `--output` / `-o` | Report path |
 | `--format` / `-f` | `json`, `csv`, or `html` |
@@ -81,6 +84,8 @@ Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. Th
 python main.py --target 127.0.0.1 --ports 1-1000
 python main.py --target 127.0.0.1 --ports 22,80,443
 python main.py --target 127.0.0.1 --profile quick
+python main.py --target ::1 --profile quick
+python main.py --target localhost --ipv6 --ports 22,80,443
 python main.py --target 127.0.0.1 --profile common --show-closed
 python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5
 python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json
@@ -95,7 +100,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Response Time, Banner). Quick and Common ignore the start/end fields and scan those named port sets. After a scan finishes, **SAVE HTML** writes a self-contained report you can open in a browser.
+Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **Prefer IPv6**, **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Response Time, Banner). Quick and Common ignore the start/end fields and scan those named port sets. After a scan finishes, **SAVE HTML** writes a self-contained report you can open in a browser. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -147,7 +152,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner`.
 ## How It Works
 
 1. Validate target, ports (range, list, or profile), timeout, and thread count.
-2. Resolve hostname to IPv4 with `socket.getaddrinfo` (`AF_INET` only).
+2. Resolve hostname to IPv4 (A) or IPv6 (AAAA) with `socket.getaddrinfo`. Literals skip DNS. Dual-stack names prefer IPv4 unless `--ipv6` / Prefer IPv6.
 3. Probe each port concurrently (bounded thread pool).
 4. Map the connect result to OPEN / CLOSED / TIMEOUT.
 5. For OPEN ports, look up a service name and optionally read a banner.
@@ -155,7 +160,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner`.
 
 ## TCP Connect Scanning
 
-The probe uses a non-blocking TCP socket and `connect_ex((ip, port))`:
+The probe uses a non-blocking TCP socket and `connect_ex`. IPv4 uses `(ip, port)`; IPv6 uses `(ip, port, 0, 0)` on an `AF_INET6` socket:
 
 - **0** — handshake completed → **OPEN**
 - Connection refused (e.g. `ECONNREFUSED` / `WSAECONNREFUSED`) → **CLOSED**
@@ -192,7 +197,8 @@ Tests cover validation, connect-code mapping, mocked probes, mocked DNS, and ser
 
 ## Limitations
 
-- IPv4 / TCP only (no UDP, no IPv6)
+- TCP only (no UDP). One address family per run (IPv4 or IPv6, not both at once)
+- IPv6 zone identifiers (`fe80::1%eth0`) are not supported
 - Connect scan only (no SYN/FIN/Xmas, no spoofing)
 - Service names are table lookups, not protocol fingerprinting
 - Banners are passive; HTTP/TLS often send nothing until the client speaks
@@ -216,7 +222,6 @@ Logs and reports may contain IP addresses, port numbers, and banners. Do not log
 ## Future Improvements
 
 - UDP scanning
-- IPv6 support
 - Advanced service detection
 - Better banner parsing
 - Host discovery

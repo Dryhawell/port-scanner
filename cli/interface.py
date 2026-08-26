@@ -55,7 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "examples:\n"
             "  python main.py --gui\n"
-            "  python main.py --target 127.0.0.1 --profile quick\n"
+            "  python main.py --target ::1 --profile quick\n"
+            "  python main.py --target localhost --ipv6 --ports 22,80,443\n"
             "  python main.py --target 127.0.0.1 --ports 22,80,443\n"
             "  python main.py --target 127.0.0.1 --ports 1-1000\n"
             "  python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5\n"
@@ -81,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target",
         "-t",
-        help="IPv4 address or hostname to scan (required for CLI)",
+        help="IPv4, IPv6, or hostname to scan (required for CLI)",
     )
     parser.add_argument(
         "--ports",
@@ -102,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--threads",
         default=str(DEFAULT_MAX_WORKERS),
         help=f"Max worker threads, 1-{MAX_WORKERS} (default: {DEFAULT_MAX_WORKERS})",
+    )
+    parser.add_argument(
+        "--ipv6",
+        action="store_true",
+        help="Resolve hostnames to IPv6 (AAAA). Literals still use their own family",
     )
     parser.add_argument(
         "--show-closed",
@@ -236,6 +242,7 @@ def run(argv: list[str] | None = None) -> int:
             max_workers=args.threads,
             on_progress=on_progress,
             ports=port_list,
+            prefer_ipv6=args.ipv6,
         )
     except ValidationError as exc:
         _end_progress_line(args.verbose)

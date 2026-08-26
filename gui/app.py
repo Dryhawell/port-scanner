@@ -132,6 +132,7 @@ class ScannerApp:
         self.timeout_var = tk.StringVar(value=str(DEFAULT_TIMEOUT))
         self.threads_var = tk.StringVar(value=str(DEFAULT_MAX_WORKERS))
         self.profile_var = tk.StringVar(value="Custom")
+        self.ipv6_var = tk.BooleanVar(value=False)
 
         fields = (
             ("Target IP / Hostname", self.target_var, 0, 0, 2),
@@ -166,6 +167,20 @@ class ScannerApp:
             pady=8,
         )
         self.start_button.grid(row=1, column=3, sticky="e", padx=8, pady=8)
+        ipv6_cell = tk.Frame(inner, bg=PANEL)
+        ipv6_cell.grid(row=2, column=0, sticky="w", padx=8, pady=(0, 4))
+        tk.Checkbutton(
+            ipv6_cell,
+            text="Prefer IPv6 (hostnames)",
+            variable=self.ipv6_var,
+            bg=PANEL,
+            fg=FG,
+            selectcolor=ENTRY_BG,
+            activebackground=PANEL,
+            activeforeground=FG,
+            highlightthickness=0,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w")
         for index in range(4):
             inner.grid_columnconfigure(index, weight=1)
 
@@ -313,6 +328,7 @@ class ScannerApp:
         timeout = self.timeout_var.get()
         threads = self.threads_var.get()
         profile = self.profile_var.get()
+        prefer_ipv6 = bool(self.ipv6_var.get())
 
         self._clear_table()
         self._open_seen = 0
@@ -325,7 +341,7 @@ class ScannerApp:
 
         self._worker = threading.Thread(
             target=self._scan_worker,
-            args=(target, start_port, end_port, timeout, threads, profile),
+            args=(target, start_port, end_port, timeout, threads, profile, prefer_ipv6),
             daemon=True,
             name="scan-worker",
         )
@@ -340,6 +356,7 @@ class ScannerApp:
         timeout: str,
         threads: str,
         profile: str,
+        prefer_ipv6: bool,
     ) -> None:
         def on_progress(completed: int, total: int, result: PortScanResult) -> None:
             self._events.put(("progress", completed, total, result))
@@ -353,6 +370,7 @@ class ScannerApp:
                     max_workers=threads,
                     on_progress=on_progress,
                     ports=SCAN_PROFILES[profile_key],
+                    prefer_ipv6=prefer_ipv6,
                 )
             else:
                 report = self._scanner.scan(
@@ -362,6 +380,7 @@ class ScannerApp:
                     timeout,
                     threads,
                     on_progress=on_progress,
+                    prefer_ipv6=prefer_ipv6,
                 )
         except ValidationError as exc:
             logger.error("%s", exc)
