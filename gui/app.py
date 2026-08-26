@@ -34,6 +34,7 @@ from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import ValidationError, validate_interval, validate_runs
 from utils.exporter import ExportError, ExportFormat, export_report, infer_format
+from utils.history import HistoryError, ScanHistory, record_report
 from utils.logger import get_logger, setup_logging
 
 logger = get_logger()
@@ -285,6 +286,21 @@ class ScannerApp:
             state="disabled",
         )
         self.save_button.pack(side="right")
+        self.history_button = tk.Button(
+            heading_row,
+            text="HISTORY",
+            command=self.show_history,
+            bg=ENTRY_BG,
+            fg=FG,
+            activebackground=BUTTON_BG,
+            activeforeground=BUTTON_FG,
+            relief="flat",
+            font=("Consolas", 9, "bold"),
+            cursor="hand2",
+            padx=10,
+            pady=4,
+        )
+        self.history_button.pack(side="right", padx=(0, 8))
 
         scroll = ttk.Scrollbar(table_frame)
         scroll.pack(side="right", fill="y")
@@ -621,8 +637,9 @@ class ScannerApp:
             f"Checking {result.ip}...  {completed}/{total}  ({percent:.0f}%)"
         )
 
-    def _show_report(self, report: ScanReport, *, finished: bool = True) -> None:
+    def _show_report(self, report: ScanReport, *, finished: bool = True, record: bool = True) -> None:
         self._clear_table()
+        self._set_table_mode(discover=False)
         for result in report.results:
             self._insert_result(result)
         open_count = report.count(PortState.OPEN)
@@ -634,6 +651,10 @@ class ScannerApp:
         )
         if self._delta_note:
             status = f"{status}  |  {self._delta_note}"
+        if record:
+            history_note = self._record_history(report)
+            if history_note:
+                status = f"{status}  |  {history_note}"
         self.status_var.set(status)
         self.progress["value"] = 100
         self._last_report = report
@@ -641,8 +662,15 @@ class ScannerApp:
         if finished:
             self.start_button.config(state="normal")
 
-    def _show_discovery_report(self, report: DiscoveryReport, *, finished: bool = True) -> None:
+    def _show_discovery_report(
+        self,
+        report: DiscoveryReport,
+        *,
+        finished: bool = True,
+        record: bool = True,
+    ) -> None:
         self._clear_table()
+        self._set_table_mode(discover=True)
         for result in report.results:
             self._insert_host(result)
         up_count = report.count(HostState.UP)
@@ -651,6 +679,10 @@ class ScannerApp:
         status = f"Done. {report.spec}  |  {len(report.results)} hosts  |  {duration}"
         if self._delta_note:
             status = f"{status}  |  {self._delta_note}"
+        if record:
+            history_note = self._record_history(report)
+            if history_note:
+                status = f"{status}  |  {history_note}"
         self.status_var.set(status)
         self.progress["value"] = 100
         self._last_report = report
@@ -680,6 +712,119 @@ class ScannerApp:
             messagebox.showerror("Export failed", str(exc))
             return
         self.status_var.set(f"Report saved: {saved}")
+
+    def _record_history(self, report: ScanReport | DiscoveryReport) -> str | None:
+        try:
+            scan_id = record_report(report)
+        except HistoryError as extra:
+            logger.error("%s", extra)
+            return "history not saved"
+        return f"history #{scan_id}"
+
+    def show_history(self) -> None:
+        try:
+            rows = ScanHistory().list_scans(limit=50)
+        except HistoryError as extra:
+            messagebox.showerror("History failed", str(extra))
+            return
+        window = tk.Toplevel(self.root)
+        window.title("Scan history")
+        window.configure(bg=BG)
+        window.geometry("760x420")
+        window.transient(self.root)
+        tk.Label(
+            window,
+            text="Local sqlite history  |  reports/history.db  |  not a remote log",
+            bg=BG,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", padx=12, pady=(12, 6))
+        table_frame = tk.Frame(window, bg=BG)
+        table_frame.pack(fill="both", expand=True, padx=12)
+        scroll = ttk.Scrollbar(table_frame)
+        scroll.pack(side="right", fill="y")
+        columns = ("id", "time", "method", "target", "result")
+        table = ttk.Treeview(
+            table_frame,
+            columns=columns,
+            show="headings",
+            yscrollcommand=scroll.set,
+            selectmode="browse",
+        )
+        scroll.config(command=table.yview)
+        headings = {
+            "id": "ID",
+            "time": "UTC time",
+            "method": "Method",
+            "target": "Target",
+            "result": "Result",
+        }
+        widths = {"id": 50, "time": 150, "method": 110, "target": 220, "result": 120}
+        for key, title in headings.items():
+            table.heading(key, text=title, anchor="w")
+            table.column(key, width=widths[key], stretch=key == "target", anchor="w")
+        for item in rows:
+            unit = "up" if item.kind == "discovery" else "open"
+            table.insert(
+                "",
+                "end",
+                iid=str(item.id),
+                values=(
+                    item.id,
+                    item.started_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    item.method,
+                    item.target,
+                    f"{item.hits}/{item.scanned} {unit}",
+                ),
+            )
+        table.pack(fill="both", expand=True)
+        if not rows:
+            tk.Label(
+                window,
+                text="No stored scans yet. Run a scan to record one.",
+                bg=BG,
+                fg=MUTED,
+                font=("Segoe UI", 10),
+            ).pack(pady=8)
+
+        def load_selected() -> None:
+            selection = table.selection()
+            if not selection:
+                messagebox.showinfo("Scan history", "Select a stored scan first.")
+                return
+            self._load_history_id(int(selection[0]))
+            window.destroy()
+
+        buttons = tk.Frame(window, bg=BG)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(
+            buttons,
+            text="LOAD",
+            command=load_selected,
+            bg=BUTTON_BG,
+            fg=BUTTON_FG,
+            activebackground=ACCENT,
+            activeforeground=BG,
+            relief="flat",
+            font=("Consolas", 9, "bold"),
+            cursor="hand2",
+            padx=12,
+            pady=4,
+        ).pack(side="right")
+        table.bind("<Double-1>", lambda _event: load_selected())
+
+    def _load_history_id(self, scan_id: int) -> None:
+        try:
+            report = ScanHistory().load(scan_id)
+        except HistoryError as extra:
+            messagebox.showerror("History failed", str(extra))
+            return
+        self._delta_note = None
+        if isinstance(report, DiscoveryReport):
+            self._show_discovery_report(report, record=False)
+        else:
+            self._show_report(report, record=False)
+        self.status_var.set(f"{self.status_var.get()}  |  loaded #{scan_id}")
 
     def _insert_result(self, result: PortScanResult) -> None:
         self.table.insert(

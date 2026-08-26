@@ -7,7 +7,7 @@ Port ranges below are conventional IANA groupings, not proof of a service:
 """
 
 APP_NAME = "port-scanner"
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.11.0"
 
 MIN_PORT = 1
 MAX_PORT = 65535
@@ -17,6 +17,8 @@ MAX_WORKERS = 200
 MIN_INTERVAL = 5
 MAX_INTERVAL = 86400
 MAX_RUNS = 1000
+DEFAULT_HISTORY_LIMIT = 20
+MAX_HISTORY_LIMIT = 500
 PROTOCOL_TCP = "tcp"
 PROTOCOL_UDP = "udp"
 UDP_PROBE_PAYLOAD = b"\x00"

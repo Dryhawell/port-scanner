@@ -15,8 +15,10 @@ from pathlib import Path
 from scanner.constants import (
     APP_NAME,
     APP_VERSION,
+    DEFAULT_HISTORY_LIMIT,
     DEFAULT_MAX_WORKERS,
     DEFAULT_TIMEOUT,
+    MAX_HISTORY_LIMIT,
     MAX_INTERVAL,
     MAX_RUNS,
     MAX_WORKERS,
@@ -53,6 +55,7 @@ from utils.exporter import (
     infer_format,
     path_for_run,
 )
+from utils.history import HistoryError, ScanHistory, ScanSummary, record_report
 from utils.logger import setup_logging
 
 _STATE_PREFIX = {
@@ -84,6 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target 127.0.0.1 --discover\n"
             "  python main.py --target 192.168.1.0/24 --discover --show-closed\n"
             "  python main.py --target 127.0.0.1 --profile quick --interval 60 --runs 3\n"
+            "  python main.py --history\n"
+            "  python main.py --history-id 3\n"
+            "  python main.py --history-diff 3 4\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -176,6 +182,37 @@ def build_parser() -> argparse.ArgumentParser:
             f"How many times to scan when --interval is set, 1-{MAX_RUNS} "
             "(omit to repeat until Ctrl+C)"
         ),
+    )
+    parser.add_argument(
+        "--history",
+        action="store_true",
+        help="List stored scans from the local sqlite database (reports/history.db)",
+    )
+    parser.add_argument(
+        "--history-id",
+        type=int,
+        metavar="ID",
+        help="Print one stored scan by row id",
+    )
+    parser.add_argument(
+        "--history-diff",
+        nargs=2,
+        type=int,
+        metavar=("OLD", "NEW"),
+        help="Diff two stored scans (newly open / gone ports, or newly up / gone hosts)",
+    )
+    parser.add_argument(
+        "--history-limit",
+        default=str(DEFAULT_HISTORY_LIMIT),
+        help=(
+            f"How many rows --history lists, 1-{MAX_HISTORY_LIMIT} "
+            f"(default: {DEFAULT_HISTORY_LIMIT})"
+        ),
+    )
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        help="Do not record this run in the local sqlite database",
     )
     return parser
 
@@ -286,12 +323,34 @@ def run(argv: list[str] | None = None) -> int:
     if args.gui:
         if args.interval or args.runs:
             parser.error("do not combine --gui with --interval or --runs")
+        if args.history or args.history_id is not None or args.history_diff is not None:
+            parser.error("do not combine --gui with history flags")
         from gui.app import run_app
 
         return run_app()
 
+    history_query = (
+        args.history
+        or args.history_id is not None
+        or args.history_diff is not None
+    )
+    if history_query:
+        if args.interval or args.runs:
+            parser.error("do not combine history query with --interval or --runs")
+        query_flags = sum(
+            [
+                bool(args.history),
+                args.history_id is not None,
+                args.history_diff is not None,
+            ]
+        )
+        if query_flags > 1:
+            parser.error("use only one of --history, --history-id, or --history-diff")
+        logger = setup_logging(verbose=args.verbose)
+        return _run_history_query(args, logger)
+
     if not args.target:
-        parser.error("--target is required unless --gui is used")
+        parser.error("--target is required unless --gui or a history flag is used")
     if args.discover and args.udp:
         parser.error("host discovery uses TCP ping; do not combine --discover with --udp")
     if args.discover and (args.ports or args.profile):
@@ -461,6 +520,7 @@ def _run_scan(
 
     if saved is not None:
         print(f"Report saved: {saved}")
+    _maybe_record(report, args.no_history)
     return 0, report
 
 
@@ -515,6 +575,7 @@ def _run_discovery(
 
     if saved is not None:
         print(f"Report saved: {saved}")
+    _maybe_record(report, args.no_history)
     return 0, report
 
 
@@ -522,6 +583,103 @@ def _print_discovery_progress(completed: int, total: int, live_count: int) -> No
     bar = render_progress_bar(completed, total)
     line = f"\rProgress: {bar}  Found: {live_count} live hosts"
     print(line, end="", file=sys.stderr, flush=True)
+
+
+def _maybe_record(report: ScanReport | DiscoveryReport, skip: bool) -> None:
+    if skip:
+        return
+    try:
+        scan_id = record_report(report)
+    except HistoryError as extra:
+        print(f"History not saved: {extra}", file=sys.stderr)
+        return
+    print(f"History recorded: #{scan_id}")
+
+
+def _run_history_query(args: argparse.Namespace, logger: logging.Logger) -> int:
+    try:
+        limit = _parse_history_limit(args.history_limit)
+        store = ScanHistory()
+        if args.history_diff is not None:
+            old_id, new_id = args.history_diff
+            kind, appeared, disappeared = store.diff(old_id, new_id)
+            _print_stored_diff(old_id, new_id, kind, appeared, disappeared)
+            return 0
+        if args.history_id is not None:
+            report = store.load(args.history_id)
+            print(f"Stored scan #{args.history_id}")
+            if isinstance(report, DiscoveryReport):
+                print_discovery_report(report, show_closed=args.show_closed)
+            else:
+                print_report(report, show_closed=args.show_closed)
+            try:
+                saved = _maybe_export(report, args.output, args.format)
+            except ExportError as extra:
+                return _cli_error(logger, extra)
+            if saved is not None:
+                print(f"Report saved: {saved}")
+            return 0
+        rows = store.list_scans(target=args.target, limit=limit)
+        _print_history_list(rows, target=args.target)
+        return 0
+    except HistoryError as extra:
+        return _cli_error(logger, extra)
+
+
+def _parse_history_limit(raw: str) -> int:
+    try:
+        value = int(str(raw).strip())
+    except ValueError as extra:
+        raise HistoryError(
+            f"History limit must be an integer 1-{MAX_HISTORY_LIMIT}."
+        ) from extra
+    if value < 1 or value > MAX_HISTORY_LIMIT:
+        raise HistoryError(f"History limit must be 1-{MAX_HISTORY_LIMIT}.")
+    return value
+
+
+def _print_history_list(rows: list[ScanSummary], *, target: str | None) -> None:
+    print("Local scan history (sqlite). Not a remote log or alerting service.")
+    if target:
+        print(f"Filter: target={target}")
+    if not rows:
+        print("No stored scans yet.")
+        return
+    print()
+    print(f"{'ID':>4}  {'UTC time':<19}  {'Method':<12}  {'Target':<22}  Result")
+    for item in rows:
+        stamp = item.started_at.strftime("%Y-%m-%d %H:%M:%S")
+        unit = "up" if item.kind == "discovery" else "open"
+        result = f"{item.hits}/{item.scanned} {unit}"
+        print(
+            f"{item.id:>4}  {stamp:<19}  {item.method:<12}  "
+            f"{item.target:<22}  {result}"
+        )
+    print()
+    print("Use --history-id ID to print a run, --history-diff OLD NEW to compare.")
+
+
+def _print_stored_diff(
+    old_id: int,
+    new_id: int,
+    kind: str,
+    appeared: list[int] | list[str],
+    disappeared: list[int] | list[str],
+) -> None:
+    print(f"Changes from stored #{old_id} to #{new_id}:")
+    if not appeared and not disappeared:
+        print("  (none)")
+        return
+    if kind == "host":
+        for host in appeared:
+            print(f"  [+] {host} newly up")
+        for host in disappeared:
+            print(f"  [-] {host} no longer up")
+        return
+    for port in appeared:
+        print(f"  [+] {port} newly open")
+    for port in disappeared:
+        print(f"  [-] {port} no longer open")
 
 
 def _maybe_export(

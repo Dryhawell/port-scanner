@@ -33,6 +33,10 @@ reports/*.json
 reports/*.csv
 reports/*.html
 reports/*.pdf
+reports/*.db
+reports/*.db-wal
+reports/*.db-shm
+reports/*.sqlite
 
 # OS
 .DS_Store
