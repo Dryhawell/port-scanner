@@ -9,7 +9,7 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from scanner.constants import APP_VERSION, DEFAULT_MAX_WORKERS, DEFAULT_TIMEOUT, SCAN_PROFILES
@@ -17,6 +17,7 @@ from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import ValidationError
+from utils.exporter import ExportError, ExportFormat, export_report
 from utils.logger import get_logger, setup_logging
 
 logger = get_logger()
@@ -56,6 +57,7 @@ class ScannerApp:
         self._events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._worker: threading.Thread | None = None
         self._open_seen = 0
+        self._last_report: ScanReport | None = None
         self._build_style()
         self._build_layout()
 
@@ -197,13 +199,31 @@ class ScannerApp:
 
         table_frame = tk.Frame(self.root, bg=BG)
         table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        heading_row = tk.Frame(table_frame, bg=BG)
+        heading_row.pack(fill="x", pady=(0, 4))
         tk.Label(
-            table_frame,
+            heading_row,
             text="RESULTS",
             bg=BG,
             fg=MUTED,
             font=("Consolas", 10, "bold"),
-        ).pack(anchor="w", pady=(0, 4))
+        ).pack(side="left")
+        self.save_button = tk.Button(
+            heading_row,
+            text="SAVE HTML",
+            command=self.save_html_report,
+            bg=ENTRY_BG,
+            fg=FG,
+            activebackground=BUTTON_BG,
+            activeforeground=BUTTON_FG,
+            relief="flat",
+            font=("Consolas", 9, "bold"),
+            cursor="hand2",
+            padx=10,
+            pady=4,
+            state="disabled",
+        )
+        self.save_button.pack(side="right")
 
         scroll = ttk.Scrollbar(table_frame)
         scroll.pack(side="right", fill="y")
@@ -296,6 +316,8 @@ class ScannerApp:
 
         self._clear_table()
         self._open_seen = 0
+        self._last_report = None
+        self.save_button.config(state="disabled")
         self.progress["value"] = 0
         self.open_count_var.set("Open ports: 0")
         self.status_var.set("Scanning...")
@@ -401,7 +423,27 @@ class ScannerApp:
             f"{report.port_label()}  |  {duration}"
         )
         self.progress["value"] = 100
+        self._last_report = report
+        self.save_button.config(state="normal")
         self.start_button.config(state="normal")
+
+    def save_html_report(self) -> None:
+        if self._last_report is None:
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".html",
+            filetypes=(("HTML", "*.html"), ("All files", "*.*")),
+            initialfile="scan_report.html",
+        )
+        if not path:
+            return
+        try:
+            saved = export_report(self._last_report, path, ExportFormat.HTML)
+        except ExportError as exc:
+            logger.error("%s", exc)
+            messagebox.showerror("Export failed", str(exc))
+            return
+        self.status_var.set(f"Report saved: {saved}")
 
     def _insert_result(self, result: PortScanResult) -> None:
         self.table.insert(
@@ -421,6 +463,8 @@ class ScannerApp:
     def _finish_with_error(self, message: str) -> None:
         self.status_var.set(f"Error: {message}")
         self.progress["value"] = 0
+        self._last_report = None
+        self.save_button.config(state="disabled")
         self.start_button.config(state="normal")
 
     def _clear_table(self) -> None:

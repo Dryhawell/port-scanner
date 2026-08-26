@@ -26,3 +26,7 @@ def test_parser_accepts_profile_or_ports() -> None:
     port_args = parser.parse_args(["--target", "127.0.0.1", "--ports", "22,80,443"])
     assert port_args.ports == "22,80,443"
     assert port_args.profile is None
+    html_args = parser.parse_args(
+        ["--target", "127.0.0.1", "--ports", "80", "--format", "html"]
+    )
+    assert html_args.format == "html"

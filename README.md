@@ -1,6 +1,6 @@
 # Port Scanner
 
-Version **1.2.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
+Version **1.3.0** — an educational TCP connect scanner for **authorized** hosts. It probes a port range, a comma-separated list, or a named profile on an IPv4 address or hostname, reports OPEN / CLOSED / TIMEOUT, and can attach a service-name hint, connection time, and a passive banner.
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -20,7 +20,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Passive banner grab (read only; no HTTP/SMTP probes)
 - Per-port latency with `time.perf_counter()`
 - CLI (`argparse`) with a live progress bar, plus a dark-themed Tkinter GUI
-- JSON and CSV reports under `reports/`
+- JSON, CSV, and self-contained HTML reports under `reports/`
 - File logging to `logs/scanner.log`
 - Unit tests that mock sockets and DNS (no internet required)
 
@@ -33,7 +33,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 | Concurrency | `concurrent.futures.ThreadPoolExecutor` |
 | CLI | `argparse` |
 | GUI | Tkinter / `ttk` |
-| Reports | `json`, `csv` |
+| Reports | `json`, `csv`, HTML |
 | Logging | `logging` |
 | Tests | `pytest` |
 
@@ -69,7 +69,7 @@ python main.py --target 127.0.0.1 --profile quick
 | `--threads` | Max workers, `1-200` (default `50`) |
 | `--show-closed` | Print CLOSED and TIMEOUT as well as OPEN |
 | `--output` / `-o` | Report path |
-| `--format` / `-f` | `json` or `csv` |
+| `--format` / `-f` | `json`, `csv`, or `html` |
 | `--verbose` / `-v` | DEBUG lines on the console |
 | `--gui` | Open the Tkinter UI |
 
@@ -85,6 +85,7 @@ python main.py --target 127.0.0.1 --profile common --show-closed
 python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5
 python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json
 python main.py --target 127.0.0.1 --ports 22 --format csv
+python main.py --target 127.0.0.1 --profile quick --format html
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```
 
@@ -94,7 +95,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 python main.py --gui
 ```
 
-Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Response Time, Banner). Quick and Common ignore the start/end fields and scan those named port sets.
+Fields: target, start/end port, timeout, threads, profile (Custom / Quick / Common), **START SCAN**. Below: status, open-port count, progress bar, result table (Port, State, Protocol, Service, Response Time, Banner). Quick and Common ignore the start/end fields and scan those named port sets. After a scan finishes, **SAVE HTML** writes a self-contained report you can open in a browser.
 
 The scan runs on a **background thread**. Progress events go through a `queue.Queue`; only the Tk main thread updates widgets, so the window should stay responsive.
 
@@ -134,7 +135,7 @@ scanner/
   service.py            getservbyport hint
   banner.py             passive recv + sanitize
 utils/
-  exporter.py           JSON / CSV
+  exporter.py           JSON / CSV / HTML
   logger.py             logs/scanner.log
 tests/                  pytest
 reports/                generated reports (gitignored)
@@ -150,7 +151,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner`.
 3. Probe each port concurrently (bounded thread pool).
 4. Map the connect result to OPEN / CLOSED / TIMEOUT.
 5. For OPEN ports, look up a service name and optionally read a banner.
-6. Sort results by port number and print, export, or show in the GUI.
+6. Sort results by port number and print, export (JSON, CSV, or HTML), or show in the GUI.
 
 ## TCP Connect Scanning
 
@@ -220,7 +221,7 @@ Logs and reports may contain IP addresses, port numbers, and banners. Do not log
 - Better banner parsing
 - Host discovery
 - Scheduled authorized scans
-- HTML / PDF reports
+- PDF reports
 - Scan history in a database
 - Visualization
 - Optional vulnerability-information lookup (reference data only)

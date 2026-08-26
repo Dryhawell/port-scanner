@@ -1,12 +1,13 @@
-"""Export scan reports to JSON or CSV.
+"""Export scan reports to JSON, CSV, or HTML.
 
 Generated files go under reports/ by default and are gitignored.
-The JSON shape is meant to be consumed by other tools without scraping CLI text.
+JSON is for other tools; HTML is a self-contained page you can open in a browser.
 """
 
 from __future__ import annotations
 
 import csv
+import html
 import json
 from datetime import datetime
 from enum import Enum
@@ -26,6 +27,7 @@ JSON_INDENT = 2
 class ExportFormat(str, Enum):
     JSON = "json"
     CSV = "csv"
+    HTML = "html"
 
 
 class ExportError(ValueError):
@@ -74,10 +76,12 @@ def export_report(
     format_name = _parse_format(fmt)
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    if format_name is ExportFormat.JSON:
-        _write_json(report, output)
-    else:
-        _write_csv(report, output)
+    writers = {
+        ExportFormat.JSON: _write_json,
+        ExportFormat.CSV: _write_csv,
+        ExportFormat.HTML: _write_html,
+    }
+    writers[format_name](report, output)
     logger.info("Report saved: %s", output)
     return output
 
@@ -126,6 +130,112 @@ def _write_csv(report: ScanReport, path: Path) -> None:
         raise ExportError(f"Could not write CSV report: {exc}") from exc
 
 
+def report_to_html(report: ScanReport) -> str:
+    """Build a standalone HTML document for a scan report."""
+    open_count = report.count(PortState.OPEN)
+    closed_count = report.count(PortState.CLOSED)
+    timeout_count = report.count(PortState.TIMEOUT)
+    duration = "—" if report.duration is None else f"{report.duration:.2f}s"
+    scan_time = _isoformat(report.started_at) or "—"
+    rows = "\n".join(_html_result_row(item) for item in report.results)
+    if not rows:
+        rows = (
+            '<tr><td colspan="6" class="empty">No ports in this report.</td></tr>'
+        )
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="en">\n'
+        "<head>\n"
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>{html.escape(APP_NAME)} report — {html.escape(report.target)}</title>\n"
+        f"<style>{_HTML_CSS}</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<main>\n"
+        f"<p class=\"notice\">{html.escape(APP_NAME)} {html.escape(APP_VERSION)}"
+        " — authorized TCP connect scan only. Not a vulnerability assessment.</p>\n"
+        "<h1>Scan report</h1>\n"
+        "<section class=\"meta\">\n"
+        f"<div><span>Target</span><strong>{html.escape(report.target)}</strong></div>\n"
+        f"<div><span>Resolved IP</span><strong>{html.escape(report.resolved_ip)}</strong></div>\n"
+        f"<div><span>Ports</span><strong>{html.escape(report.port_label())}</strong></div>\n"
+        f"<div><span>Scan time</span><strong>{html.escape(scan_time)}</strong></div>\n"
+        f"<div><span>Duration</span><strong>{html.escape(duration)}</strong></div>\n"
+        f"<div><span>Timeout</span><strong>{html.escape(str(report.timeout))}s</strong></div>\n"
+        f"<div><span>Threads</span><strong>{html.escape(str(report.max_workers))}</strong></div>\n"
+        f"<div><span>Method</span><strong>tcp_connect</strong></div>\n"
+        "</section>\n"
+        "<section class=\"summary\">\n"
+        f"<div class=\"stat\"><span>Scanned</span><strong>{len(report.results)}</strong></div>\n"
+        f"<div class=\"stat open\"><span>Open</span><strong>{open_count}</strong></div>\n"
+        f"<div class=\"stat closed\"><span>Closed</span><strong>{closed_count}</strong></div>\n"
+        f"<div class=\"stat timeout\"><span>Timeout</span><strong>{timeout_count}</strong></div>\n"
+        "</section>\n"
+        "<table>\n"
+        "<thead><tr>"
+        "<th>Port</th><th>State</th><th>Protocol</th>"
+        "<th>Service</th><th>Response</th><th>Banner</th>"
+        "</tr></thead>\n"
+        f"<tbody>\n{rows}\n</tbody>\n"
+        "</table>\n"
+        "</main>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _write_html(report: ScanReport, path: Path) -> None:
+    try:
+        path.write_text(report_to_html(report), encoding="utf-8")
+    except OSError as exc:
+        logger.error("Could not write HTML report: %s", exc)
+        raise ExportError(f"Could not write HTML report: {exc}") from exc
+
+
+def _html_result_row(result: PortScanResult) -> str:
+    latency = result.latency_label() or "—"
+    service = result.service or "—"
+    banner = result.banner or "—"
+    state = result.state.value
+    return (
+        f'<tr class="{html.escape(state)}">'
+        f"<td>{result.port}</td>"
+        f"<td>{html.escape(state)}</td>"
+        f"<td>{html.escape(result.protocol)}</td>"
+        f"<td>{html.escape(service)}</td>"
+        f"<td>{html.escape(latency)}</td>"
+        f"<td class=\"banner\">{html.escape(banner)}</td>"
+        "</tr>"
+    )
+
+
+_HTML_CSS = """
+body{margin:0;background:#0d1117;color:#e6edf3;font:14px/1.45 Segoe UI,system-ui,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:28px 20px 48px}
+h1{font:600 28px Consolas,ui-monospace,monospace;margin:0 0 16px}
+.notice{color:#8b949e;margin:0 0 12px;font-size:12px}
+.meta,.summary{display:grid;gap:10px;margin:0 0 18px}
+.meta{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.summary{grid-template-columns:repeat(4,minmax(0,1fr))}
+.meta div,.stat{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 12px}
+.meta span,.stat span{display:block;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.meta strong,.stat strong{font:600 15px Consolas,ui-monospace,monospace}
+.stat.open strong{color:#3fb950}
+.stat.closed strong{color:#f85149}
+.stat.timeout strong{color:#d29922}
+table{width:100%;border-collapse:collapse;background:#161b22;border:1px solid #30363d}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #30363d;font:13px Consolas,ui-monospace,monospace}
+th{color:#8b949e;font-size:11px;text-transform:uppercase}
+tr.OPEN td:nth-child(2){color:#3fb950}
+tr.CLOSED td:nth-child(2){color:#f85149}
+tr.TIMEOUT td:nth-child(2){color:#d29922}
+td.banner{color:#8b949e;word-break:break-word}
+td.empty{text-align:center;color:#8b949e}
+@media (max-width:700px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+""".replace("\n", "")
+
+
 def _result_to_dict(result: PortScanResult) -> dict[str, object]:
     return {
         "port": result.port,
@@ -157,7 +267,7 @@ def _parse_format(fmt: ExportFormat | str) -> ExportFormat:
     try:
         return ExportFormat(cleaned)
     except ValueError as exc:
-        raise ExportError("Format must be json or csv.") from exc
+        raise ExportError("Format must be json, csv, or html.") from exc
 
 
 def _isoformat(value: datetime | None) -> str | None:
