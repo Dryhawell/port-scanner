@@ -9,6 +9,7 @@ import pytest
 from scanner.constants import MAX_TARGET_FILE_HOSTS, SCAN_PROFILES, UDP_SCAN_PROFILES
 from scanner.validator import (
     ValidationError,
+    exclude_ports,
     parse_discovery_targets,
     parse_port_range,
     parse_ports,
@@ -113,6 +114,17 @@ def test_parse_ports_rejects_empty() -> None:
         parse_ports("")
     with pytest.raises(ValidationError, match="Invalid port range"):
         parse_ports("22,,80")
+
+
+def test_exclude_ports_filters_and_keeps_order() -> None:
+    assert exclude_ports([22, 80, 443], None) == [22, 80, 443]
+    assert exclude_ports([22, 80, 443], "  ") == [22, 80, 443]
+    assert exclude_ports([22, 80, 443], "80") == [22, 443]
+    assert exclude_ports([22, 80, 81, 82, 443], "80-82") == [22, 443]
+    assert exclude_ports([22, 80, 443], "443,22") == [80]
+    assert exclude_ports([22, 80], "3389") == [22, 80]
+    with pytest.raises(ValidationError, match="No ports left"):
+        exclude_ports([80, 443], "80,443")
 
 
 def test_resolve_scan_profile() -> None:

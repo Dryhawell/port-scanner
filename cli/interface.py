@@ -43,6 +43,7 @@ from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import (
     ValidationError,
+    exclude_ports,
     parse_ports,
     parse_target_file,
     resolve_scan_profile,
@@ -96,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --history-diff 3 4\n"
             "  python main.py --target 127.0.0.1 --ports 21,23 --no-refs\n"
             "  python main.py --target-file hosts.txt --profile quick\n"
+            "  python main.py --target 127.0.0.1 --profile quick --exclude 80,443\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -134,6 +136,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         choices=sorted(SCAN_PROFILES),
         help="Scan a named port set: quick or common (instead of --ports)",
+    )
+    parser.add_argument(
+        "--exclude",
+        "-x",
+        help="Ports to skip, same syntax as --ports (80, 22,80,443, or 1-1023)",
     )
     parser.add_argument(
         "--timeout",
@@ -403,6 +410,8 @@ def run(argv: list[str] | None = None) -> int:
         parser.error("host discovery uses TCP ping; do not combine --discover with --udp")
     if args.discover and (args.ports or args.profile):
         parser.error("do not combine --discover with --ports or --profile")
+    if args.discover and args.exclude:
+        parser.error("do not combine --discover with --exclude")
     if args.ports and args.profile:
         parser.error("use either --ports or --profile, not both")
     if not args.discover and not args.ports and not args.profile:
@@ -567,6 +576,7 @@ def _run_scan(
             if args.profile
             else parse_ports(args.ports)
         )
+        port_list = exclude_ports(port_list, args.exclude)
     except ValidationError as exc:
         return _cli_error(logger, exc), None
 

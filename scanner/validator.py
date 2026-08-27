@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
@@ -218,6 +219,23 @@ def parse_ports(value: str) -> list[int]:
         start, end = parse_port_range(chunk)
         ports.extend(range(start, end + 1))
     return sorted(set(ports))
+
+
+def exclude_ports(ports: Sequence[int], spec: str | None) -> list[int]:
+    """Return ports with --exclude values removed. Keep the original order.
+
+    spec uses the same syntax as parse_ports (80, 22,80,443, or 1-1023).
+    A blank spec is a no-op. Ports listed in spec but absent from ports are
+    ignored. An empty remainder is an error: there is nothing left to scan.
+    """
+    remaining = list(ports)
+    if spec is None or not str(spec).strip():
+        return remaining
+    blocked = set(parse_ports(spec))
+    remaining = [port for port in remaining if port not in blocked]
+    if not remaining:
+        raise ValidationError("No ports left after exclude.")
+    return remaining
 
 
 def resolve_scan_profile(name: str, protocol: str = PROTOCOL_TCP) -> list[int]:

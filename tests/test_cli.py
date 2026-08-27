@@ -48,6 +48,10 @@ def test_parser_accepts_profile_or_ports() -> None:
     assert discover_args.discover is True
     assert discover_args.ports is None
     assert discover_args.profile is None
+    skip = parser.parse_args(
+        ["--target", "127.0.0.1", "--profile", "quick", "--exclude", "80,443"]
+    )
+    assert skip.exclude == "80,443"
 
 
 def test_run_rejects_discover_combined_with_scan_flags() -> None:
@@ -57,6 +61,8 @@ def test_run_rejects_discover_combined_with_scan_flags() -> None:
         run(["--target", "127.0.0.1", "--discover", "--ports", "80"])
     with pytest.raises(SystemExit):
         run(["--target", "127.0.0.1", "--discover", "--profile", "quick"])
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--discover", "--exclude", "80"])
 
 
 def test_parser_accepts_interval_and_runs() -> None:
@@ -403,3 +409,37 @@ def test_target_file_scans_sequentially(
     assert "Target 2/2" in output
     assert "sequential" in output
     assert "2/2 target(s) succeeded" in output
+
+
+def test_exclude_drops_ports_from_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+    seen: list[list[int]] = []
+
+    class FakeScanner:
+        def scan(self, *_args: object, **kwargs: object) -> ScanReport:
+            raw = kwargs["ports"]
+            assert isinstance(raw, (list, tuple))
+            ports = list(raw)
+            seen.append(ports)
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=ports[0],
+                end_port=ports[-1],
+                timeout=0.5,
+                results=[
+                    PortScanResult(port=port, state=PortState.CLOSED) for port in ports
+                ],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "22,80,443", "--exclude", "80"]) == 0
+    assert seen == [[22, 443]]
+    seen.clear()
+    assert run(["--target", "127.0.0.1", "--ports", "80", "--exclude", "80"]) == 1

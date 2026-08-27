@@ -28,6 +28,7 @@ from scanner.scanner import (
 from scanner.service import lookup_service
 from scanner.validator import (
     ValidationError,
+    exclude_ports,
     parse_discovery_targets,
     parse_port_range,
     parse_ports,
@@ -57,6 +58,7 @@ __all__ = [
     "ValidationError",
     "classify_banner",
     "discover_hosts",
+    "exclude_ports",
     "grab_banner",
     "lookup_advisories",
     "lookup_service",

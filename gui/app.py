@@ -33,7 +33,13 @@ from scanner.models import (
 )
 from scanner.port import PortState
 from scanner.scanner import ScannerError, TcpConnectScanner
-from scanner.validator import ValidationError, validate_interval, validate_runs
+from scanner.validator import (
+    ValidationError,
+    exclude_ports,
+    validate_interval,
+    validate_port_range,
+    validate_runs,
+)
 from utils.charts import (
     BarSpec,
     COLOR_TRACK,
@@ -166,6 +172,7 @@ class ScannerApp:
         self.ipv6_var = tk.BooleanVar(value=False)
         self.interval_var = tk.StringVar(value="")
         self.runs_var = tk.StringVar(value="1")
+        self.exclude_var = tk.StringVar(value="")
 
         fields = (
             ("Target / CIDR", self.target_var, 0, 0, 2),
@@ -238,6 +245,7 @@ class ScannerApp:
         ).pack(anchor="w")
         self._labeled_entry(inner, "Interval (s)", self.interval_var, 3, 0, 1)
         self._labeled_entry(inner, "Runs", self.runs_var, 3, 1, 1)
+        self._labeled_entry(inner, "Exclude ports", self.exclude_var, 3, 2, 2)
         for index in range(4):
             inner.grid_columnconfigure(index, weight=1)
 
@@ -445,11 +453,18 @@ class ScannerApp:
         discover = bool(self.discover_var.get())
         interval_raw = self.interval_var.get().strip()
         runs_raw = self.runs_var.get().strip() or "1"
+        exclude = self.exclude_var.get()
         try:
             interval = validate_interval(interval_raw) if interval_raw else None
             runs = validate_runs(runs_raw)
         except ValidationError as exc:
             messagebox.showerror("Invalid input", str(exc))
+            return
+        if discover and exclude.strip():
+            messagebox.showerror(
+                "Invalid input",
+                "Host discovery uses a fixed TCP-ping set. Clear Exclude ports first.",
+            )
             return
         if runs > 1 and interval is None:
             messagebox.showerror(
@@ -484,6 +499,7 @@ class ScannerApp:
                 discover,
                 interval,
                 runs,
+                exclude,
             ),
             daemon=True,
             name="scan-worker",
@@ -504,6 +520,7 @@ class ScannerApp:
         discover: bool,
         interval: float | None,
         runs: int,
+        exclude: str,
     ) -> None:
         previous: ScanReport | DiscoveryReport | None = None
         total_runs = max(1, runs)
@@ -528,22 +545,17 @@ class ScannerApp:
             scan_protocol = protocol.strip().lower()
             profiles = UDP_SCAN_PROFILES if scan_protocol == PROTOCOL_UDP else SCAN_PROFILES
             if profile_key in profiles:
-                return self._scanner.scan(
-                    target,
-                    timeout=timeout,
-                    max_workers=threads,
-                    on_progress=on_progress,
-                    ports=profiles[profile_key],
-                    prefer_ipv6=prefer_ipv6,
-                    protocol=scan_protocol,
-                )
+                port_list = list(profiles[profile_key])
+            else:
+                start, end = validate_port_range(start_port, end_port)
+                port_list = list(range(start, end + 1))
+            port_list = exclude_ports(port_list, exclude)
             return self._scanner.scan(
                 target,
-                start_port,
-                end_port,
-                timeout,
-                threads,
+                timeout=timeout,
+                max_workers=threads,
                 on_progress=on_progress,
+                ports=port_list,
                 prefer_ipv6=prefer_ipv6,
                 protocol=scan_protocol,
             )
