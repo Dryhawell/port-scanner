@@ -75,6 +75,16 @@ def report_to_dict(report: ScanReport) -> dict[str, object]:
     return payload
 
 
+def report_to_json(report: ScanReport | DiscoveryReport) -> str:
+    """Return the same JSON text that export writes to a .json file."""
+    payload = (
+        discovery_to_dict(report)
+        if isinstance(report, DiscoveryReport)
+        else report_to_dict(report)
+    )
+    return json.dumps(payload, indent=JSON_INDENT, ensure_ascii=True) + "\n"
+
+
 def discovery_to_dict(report: DiscoveryReport) -> dict[str, object]:
     """Serialize a TCP ping discovery into a JSON-friendly dictionary."""
     live = [item.ip for item in report.up_results]
@@ -155,11 +165,7 @@ def infer_format(path: str | Path) -> ExportFormat | None:
 
 def _write_json(report: ScanReport, path: Path) -> None:
     try:
-        path.write_text(
-            json.dumps(report_to_dict(report), indent=JSON_INDENT, ensure_ascii=True)
-            + "\n",
-            encoding="utf-8",
-        )
+        path.write_text(report_to_json(report), encoding="utf-8")
     except OSError as exc:
         logger.error("Could not write JSON report: %s", exc)
         raise ExportError(f"Could not write JSON report: {exc}") from exc
@@ -190,11 +196,7 @@ def _write_csv(report: ScanReport, path: Path) -> None:
 
 def _write_discovery_json(report: DiscoveryReport, path: Path) -> None:
     try:
-        path.write_text(
-            json.dumps(discovery_to_dict(report), indent=JSON_INDENT, ensure_ascii=True)
-            + "\n",
-            encoding="utf-8",
-        )
+        path.write_text(report_to_json(report), encoding="utf-8")
     except OSError as exc:
         logger.error("Could not write JSON report: %s", exc)
         raise ExportError(f"Could not write JSON report: {exc}") from exc

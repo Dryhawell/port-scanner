@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.19.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.20.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -29,6 +29,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - CLI (`argparse`) with a live progress bar, plus a dark-themed Tkinter GUI
 - Scheduled repeats in this process (`--interval` 5–86400s, `--runs` or Ctrl+C), with a diff of newly open / gone ports
 - JSON, CSV, HTML, and simple PDF reports under `reports/`
+- `--json` prints the same JSON to stdout (no file; human table skipped) so you can pipe to `jq`
 - Local sqlite scan history (`reports/history.db`) with list / show / diff
 - Automatic baseline diff vs the last stored scan of the same target (`--no-diff` to skip)
 - Result-count charts: ASCII on the CLI, SVG in HTML reports, Tkinter canvas in the GUI
@@ -87,6 +88,7 @@ python main.py --history-id 3
 python main.py --history-diff 3 4
 python main.py --target-file hosts.txt --profile quick
 python main.py --target 127.0.0.1 --profile quick --exclude 80,443
+python main.py --target 127.0.0.1 --ports 80 --json
 ```
 
 | Flag | Meaning |
@@ -102,8 +104,9 @@ python main.py --target 127.0.0.1 --profile quick --exclude 80,443
 | `--udp` | UDP probe instead of TCP connect |
 | `--discover` / `-d` | TCP ping instead of a port scan (do not combine with `--udp`, `--ports`, `--profile`, or `--exclude`) |
 | `--show-closed` | Print CLOSED and TIMEOUT, or DOWN hosts during discovery |
-| `--output` / `-o` | Report path |
-| `--format` / `-f` | `json`, `csv`, `html`, or `pdf` |
+| `--output` / `-o` | Report file path |
+| `--format` / `-f` | `json`, `csv`, `html`, or `pdf` (writes a file; default json when `--output` is set) |
+| `--json` | Print the report JSON to stdout. No file. Do not combine with `--output`, `--format`, `--gui`, `--target-file`, `--interval` / `--runs`, or history query flags |
 | `--verbose` / `-v` | DEBUG lines on the console |
 | `--interval` | Seconds to wait between authorized repeats (`5`–`86400`). Process stays in the foreground |
 | `--runs` | How many repeats when `--interval` is set (`1`–`1000`). Omit to loop until Ctrl+C |
@@ -148,7 +151,14 @@ python main.py --target-file hosts.txt --profile quick
 python main.py --target-file nets.txt --discover --show-closed
 python main.py --target 127.0.0.1 --profile quick --exclude 80,443
 python main.py --target 127.0.0.1 --ports 1-1023 --exclude 80,443
+python main.py --target 127.0.0.1 --ports 80 --json
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
+```
+
+`--json` is the same payload as a `.json` report file, on stdout. Progress and the authorized-use line go to stderr so `jq` can read stdout:
+
+```powershell
+python main.py --target 127.0.0.1 --ports 80 --json | jq .open_ports
 ```
 
 Example `hosts.txt` (UTF-8, `#` comments, blanks ignored; duplicates keep the first line):
@@ -237,7 +247,7 @@ scanner/
   banner.py             passive recv, ASCII + binary greeting parse
   advisory.py           local OPEN-port reference notes (not a vuln scan)
 utils/
-  exporter.py           JSON / CSV / HTML / PDF
+  exporter.py           JSON / CSV / HTML / PDF (and `--json` stdout)
   pdf.py                stdlib PDF 1.4 writer (Helvetica / Courier)
   history.py            sqlite scan history (reports/history.db)
   charts.py             ASCII / SVG bar charts from result counts
@@ -258,7 +268,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner` or `disc
 3. Probe each host (TCP ping) or each port concurrently (TCP connect or UDP datagram, bounded thread pool).
 4. Map the outcome to UP / DOWN, or OPEN / CLOSED / TIMEOUT.
 5. For OPEN TCP ports, look up a service name (OS table, then fallback map). If the peer speaks first, classify that greeting (ASCII or a few binary signatures). UDP OPEN ports get a table/fallback name if known; there is no TCP-style banner parse. Discovery does not grab banners. OPEN ports may also get a **local reference note** (hardening or a historical CVE id). That is a table lookup, not a live CVE feed and not a confirmation.
-6. Sort results and print, export (JSON, CSV, HTML, or PDF), or show in the GUI. HTML includes an SVG count chart; the CLI prints ASCII bars.
+6. Sort results and print, export (JSON, CSV, HTML, or PDF), or show in the GUI. `--json` writes that JSON to stdout instead of the human table (progress stays on stderr). HTML includes an SVG count chart; the CLI prints ASCII bars.
 7. Record the run in `reports/history.db` unless `--no-history` is set. If an older stored scan of the same target exists, print a baseline diff (ports probed in both runs only). `--interval` run 2+ diffs in-process instead.
 8. If `--interval` is set, wait and repeat. After the second run, print ports (or hosts) that appeared or disappeared.
 
@@ -440,7 +450,7 @@ GitHub Actions runs `python -m ruff check .` on Ubuntu and `python -m pytest` on
 - Baseline diffs match the target string exactly and only ports/hosts seen in both runs
 - Charts scale to the largest count in that picture; they are not a risk score or a network map
 - Reference notes are a small local table, not a CVE feed, not version-wide matching, and not a confirmation
-- PDF uses built-in Helvetica/Courier only; it is not a full print layout engine
+- `--json` is one JSON document on stdout for a single scan. It is not a file export, not JSONL, and not combined with `--target-file` or `--interval`
 - GitHub Actions runs ruff plus mocked unit tests on Ubuntu and Windows; it does not scan hosts and is not a security audit of pull requests
 - Ruff does not enforce `ruff format` or import sorting; long help strings are allowed (`E501` ignored)
 

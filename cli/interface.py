@@ -59,6 +59,7 @@ from utils.exporter import (
     export_report,
     infer_format,
     path_for_run,
+    report_to_json,
 )
 from utils.history import HistoryError, ScanHistory, ScanSummary, record_report
 from utils.logger import setup_logging
@@ -98,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target 127.0.0.1 --ports 21,23 --no-refs\n"
             "  python main.py --target-file hosts.txt --profile quick\n"
             "  python main.py --target 127.0.0.1 --profile quick --exclude 80,443\n"
+            "  python main.py --target 127.0.0.1 --ports 80 --json\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -183,6 +185,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-f",
         choices=[item.value for item in ExportFormat],
         help="Report format: json, csv, html, or pdf (default: json when exporting)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the report JSON to stdout (no file; skip the human table)",
     )
     parser.add_argument(
         "--verbose",
@@ -374,6 +381,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine --gui with history flags")
         if args.target_file:
             parser.error("do not combine --gui with --target-file")
+        if args.json:
+            parser.error("do not combine --gui with --json")
         from gui.app import run_app
 
         return run_app()
@@ -388,6 +397,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine history query with --interval or --runs")
         if args.target_file:
             parser.error("do not combine history query with --target-file")
+        if args.json:
+            parser.error("do not combine history query with --json")
         query_flags = sum(
             [
                 bool(args.history),
@@ -406,6 +417,12 @@ def run(argv: list[str] | None = None) -> int:
         parser.error("--target or --target-file is required unless --gui or a history flag is used")
     if args.target_file and (args.interval or args.runs):
         parser.error("do not combine --target-file with --interval or --runs")
+    if args.json and (args.output or args.format):
+        parser.error("use --json for stdout, or --output/--format for a file, not both")
+    if args.json and args.target_file:
+        parser.error("do not combine --json with --target-file")
+    if args.json and (args.interval or args.runs):
+        parser.error("do not combine --json with --interval or --runs")
     if args.discover and args.udp:
         parser.error("host discovery uses TCP ping; do not combine --discover with --udp")
     if args.discover and (args.ports or args.profile):
@@ -581,9 +598,13 @@ def _run_scan(
         return _cli_error(logger, exc), None
 
     if announce:
-        print("Use this tool only on systems you are authorized to test.")
-    print(f"Scanning {target}...")
-    sys.stdout.flush()
+        print(
+            "Use this tool only on systems you are authorized to test.",
+            file=sys.stderr if args.json else sys.stdout,
+        )
+    if not args.json:
+        print(f"Scanning {target}...")
+        sys.stdout.flush()
 
     open_found = 0
 
@@ -617,7 +638,7 @@ def _run_scan(
         return 130, None
 
     _end_progress_line(args.verbose)
-    print_report(report, show_closed=args.show_closed, show_refs=not args.no_refs)
+    _print_scan_result(report, args)
 
     try:
         saved = _maybe_export(
@@ -631,8 +652,9 @@ def _run_scan(
 
     if saved is not None:
         print(f"Report saved: {saved}")
-    _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
-    _maybe_record(report, args.no_history)
+    if not args.json:
+        _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
+    _maybe_record(report, args.no_history, quiet=args.json)
     return 0, report
 
 
@@ -645,9 +667,13 @@ def _run_discovery(
     announce: bool = True,
 ) -> tuple[int, DiscoveryReport | None]:
     if announce:
-        print("Use this tool only on systems you are authorized to test.")
-    print(f"Discovering {args.target}...")
-    sys.stdout.flush()
+        print(
+            "Use this tool only on systems you are authorized to test.",
+            file=sys.stderr if args.json else sys.stdout,
+        )
+    if not args.json:
+        print(f"Discovering {args.target}...")
+        sys.stdout.flush()
 
     live_found = 0
 
@@ -679,7 +705,7 @@ def _run_discovery(
         return 130, None
 
     _end_progress_line(args.verbose)
-    print_discovery_report(report, show_closed=args.show_closed)
+    _print_scan_result(report, args)
 
     try:
         saved = _maybe_export(
@@ -693,8 +719,9 @@ def _run_discovery(
 
     if saved is not None:
         print(f"Report saved: {saved}")
-    _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
-    _maybe_record(report, args.no_history)
+    if not args.json:
+        _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
+    _maybe_record(report, args.no_history, quiet=args.json)
     return 0, report
 
 
@@ -704,7 +731,12 @@ def _print_discovery_progress(completed: int, total: int, live_count: int) -> No
     print(line, end="", file=sys.stderr, flush=True)
 
 
-def _maybe_record(report: ScanReport | DiscoveryReport, skip: bool) -> None:
+def _maybe_record(
+    report: ScanReport | DiscoveryReport,
+    skip: bool,
+    *,
+    quiet: bool = False,
+) -> None:
     if skip:
         return
     try:
@@ -712,7 +744,8 @@ def _maybe_record(report: ScanReport | DiscoveryReport, skip: bool) -> None:
     except HistoryError as extra:
         print(f"History not saved: {extra}", file=sys.stderr)
         return
-    print(f"History recorded: #{scan_id}")
+    if not quiet:
+        print(f"History recorded: #{scan_id}")
 
 
 def _maybe_baseline_diff(
@@ -849,6 +882,20 @@ def _print_stored_diff(
         print(f"  [+] {port} newly open")
     for port in disappeared:
         print(f"  [-] {port} no longer open")
+
+
+def _print_scan_result(
+    report: ScanReport | DiscoveryReport,
+    args: argparse.Namespace,
+) -> None:
+    if args.json:
+        sys.stdout.write(report_to_json(report))
+        sys.stdout.flush()
+        return
+    if isinstance(report, DiscoveryReport):
+        print_discovery_report(report, show_closed=args.show_closed)
+        return
+    print_report(report, show_closed=args.show_closed, show_refs=not args.no_refs)
 
 
 def _maybe_export(

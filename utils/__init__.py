@@ -8,6 +8,7 @@ from utils.exporter import (
     infer_format,
     report_to_html,
     report_to_dict,
+    report_to_json,
 )
 from utils.logger import get_logger, setup_logging
 
@@ -20,5 +21,6 @@ __all__ = [
     "infer_format",
     "report_to_html",
     "report_to_dict",
+    "report_to_json",
     "setup_logging",
 ]

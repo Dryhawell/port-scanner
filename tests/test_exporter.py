@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from utils.exporter import (
     path_for_run,
     report_to_dict,
     report_to_html,
+    report_to_json,
     report_to_pdf,
 )
 
@@ -88,6 +90,10 @@ def test_sparse_json_includes_ports_list() -> None:
     first = results[0]
     assert isinstance(first, dict)
     assert first["advisories"][0]["title"] == "SSH remote login"
+    text = report_to_json(_sample_report())
+    parsed = json.loads(text)
+    assert parsed["target"] == "127.0.0.1"
+    assert parsed["scan_method"] == "tcp_connect"
 
 
 def test_invalid_format() -> None:
