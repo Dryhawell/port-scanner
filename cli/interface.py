@@ -21,6 +21,7 @@ from scanner.constants import (
     MAX_HISTORY_LIMIT,
     MAX_INTERVAL,
     MAX_RUNS,
+    MAX_TARGET_FILE_HOSTS,
     MAX_WORKERS,
     MIN_INTERVAL,
     PROGRESS_BAR_WIDTH,
@@ -43,6 +44,7 @@ from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import (
     ValidationError,
     parse_ports,
+    parse_target_file,
     resolve_scan_profile,
     validate_interval,
     validate_runs,
@@ -93,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --history-id 3\n"
             "  python main.py --history-diff 3 4\n"
             "  python main.py --target 127.0.0.1 --ports 21,23 --no-refs\n"
+            "  python main.py --target-file hosts.txt --profile quick\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -112,7 +115,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target",
         "-t",
-        help="IPv4, IPv6, hostname, or IPv4 CIDR with --discover (required for CLI)",
+        help="IPv4, IPv6, hostname, or IPv4 CIDR with --discover (required for CLI unless --target-file)",
+    )
+    parser.add_argument(
+        "--target-file",
+        metavar="PATH",
+        help=(
+            f"UTF-8 list of authorized targets, one per line, max {MAX_TARGET_FILE_HOSTS} "
+            "(# comments; sequential scans, not a parallel sweep)"
+        ),
     )
     parser.add_argument(
         "--ports",
@@ -354,6 +365,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine --gui with --interval or --runs")
         if args.history or args.history_id is not None or args.history_diff is not None:
             parser.error("do not combine --gui with history flags")
+        if args.target_file:
+            parser.error("do not combine --gui with --target-file")
         from gui.app import run_app
 
         return run_app()
@@ -366,6 +379,8 @@ def run(argv: list[str] | None = None) -> int:
     if history_query:
         if args.interval or args.runs:
             parser.error("do not combine history query with --interval or --runs")
+        if args.target_file:
+            parser.error("do not combine history query with --target-file")
         query_flags = sum(
             [
                 bool(args.history),
@@ -378,8 +393,12 @@ def run(argv: list[str] | None = None) -> int:
         logger = setup_logging(verbose=args.verbose)
         return _run_history_query(args, logger)
 
-    if not args.target:
-        parser.error("--target is required unless --gui or a history flag is used")
+    if args.target and args.target_file:
+        parser.error("use either --target or --target-file, not both")
+    if not args.target and not args.target_file:
+        parser.error("--target or --target-file is required unless --gui or a history flag is used")
+    if args.target_file and (args.interval or args.runs):
+        parser.error("do not combine --target-file with --interval or --runs")
     if args.discover and args.udp:
         parser.error("host discovery uses TCP ping; do not combine --discover with --udp")
     if args.discover and (args.ports or args.profile):
@@ -398,6 +417,9 @@ def run(argv: list[str] | None = None) -> int:
     except ValidationError as exc:
         return _cli_error(logger, exc)
 
+    if args.target_file:
+        return _run_target_file(args, logger)
+
     if interval is None:
         if args.discover:
             code, _report = _run_discovery(args, logger)
@@ -405,6 +427,50 @@ def run(argv: list[str] | None = None) -> int:
         code, _report = _run_scan(args, logger)
         return code
     return _run_scheduled(args, logger, interval, runs)
+
+
+def _run_target_file(args: argparse.Namespace, logger: logging.Logger) -> int:
+    try:
+        targets = parse_target_file(args.target_file, discover=bool(args.discover))
+    except ValidationError as extra:
+        return _cli_error(logger, extra)
+
+    print("Use this tool only on systems you are authorized to test.")
+    print(
+        f"Scanning {len(targets)} authorized target(s) from {args.target_file} "
+        "— sequential, not a parallel sweep."
+    )
+    sys.stdout.flush()
+
+    failures = 0
+    for index, target in enumerate(targets, start=1):
+        print(f"--- Target {index}/{len(targets)}: {target} ---")
+        sys.stdout.flush()
+        host_args = argparse.Namespace(**vars(args))
+        host_args.target = target
+        if args.discover:
+            code, _report = _run_discovery(
+                host_args,
+                logger,
+                run_index=1,
+                export_index=index,
+                announce=False,
+            )
+        else:
+            code, _report = _run_scan(
+                host_args,
+                logger,
+                run_index=1,
+                export_index=index,
+                announce=False,
+            )
+        if code == 130:
+            return 130
+        if code != 0:
+            failures += 1
+
+    print(f"Done. {len(targets) - failures}/{len(targets)} target(s) succeeded.")
+    return 1 if failures else 0
 
 
 def _run_scheduled(
@@ -489,6 +555,7 @@ def _run_scan(
     logger: logging.Logger,
     *,
     run_index: int = 1,
+    export_index: int | None = None,
     announce: bool = True,
 ) -> tuple[int, ScanReport | None]:
     protocol = PROTOCOL_UDP if args.udp else PROTOCOL_TCP
@@ -543,7 +610,12 @@ def _run_scan(
     print_report(report, show_closed=args.show_closed, show_refs=not args.no_refs)
 
     try:
-        saved = _maybe_export(report, args.output, args.format, run_index=run_index)
+        saved = _maybe_export(
+            report,
+            args.output,
+            args.format,
+            run_index=export_index if export_index is not None else run_index,
+        )
     except ExportError as exc:
         return _cli_error(logger, exc), None
 
@@ -559,6 +631,7 @@ def _run_discovery(
     logger: logging.Logger,
     *,
     run_index: int = 1,
+    export_index: int | None = None,
     announce: bool = True,
 ) -> tuple[int, DiscoveryReport | None]:
     if announce:
@@ -599,7 +672,12 @@ def _run_discovery(
     print_discovery_report(report, show_closed=args.show_closed)
 
     try:
-        saved = _maybe_export(report, args.output, args.format, run_index=run_index)
+        saved = _maybe_export(
+            report,
+            args.output,
+            args.format,
+            run_index=export_index if export_index is not None else run_index,
+        )
     except ExportError as exc:
         return _cli_error(logger, exc), None
 

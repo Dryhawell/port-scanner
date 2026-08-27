@@ -7,7 +7,7 @@ Port ranges below are conventional IANA groupings, not proof of a service:
 """
 
 APP_NAME = "port-scanner"
-APP_VERSION = "1.14.0"
+APP_VERSION = "1.15.0"
 
 MIN_PORT = 1
 MAX_PORT = 65535
@@ -27,6 +27,7 @@ MAX_BANNER_BYTES = 1024
 MAX_BANNER_CHARS = 200
 PROGRESS_BAR_WIDTH = 16
 MAX_DISCOVERY_HOSTS = 256
+MAX_TARGET_FILE_HOSTS = 256
 MIN_DISCOVERY_PREFIX = 24
 # TCP ports used only to see if a host answers. OPEN or CLOSED both mean up.
 DISCOVERY_PORTS: tuple[int, ...] = (80, 443, 22, 445)

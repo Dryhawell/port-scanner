@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from pathlib import Path
 from typing import Final
 
 from scanner.constants import (
@@ -15,6 +16,7 @@ from scanner.constants import (
     MAX_INTERVAL,
     MAX_PORT,
     MAX_RUNS,
+    MAX_TARGET_FILE_HOSTS,
     MAX_WORKERS,
     MIN_DISCOVERY_PREFIX,
     MIN_INTERVAL,
@@ -87,6 +89,51 @@ def parse_discovery_targets(value: str) -> tuple[str, list[str]]:
         return str(network), hosts
     single = validate_target(cleaned)
     return single, [single]
+
+
+def parse_target_file(path: str | Path, *, discover: bool = False) -> list[str]:
+    """Return unique hosts from a UTF-8 list file (comments and blanks skipped).
+
+    Each line is one --target value. With discover=True a line may be an IPv4
+    CIDR. The cap matches discovery (256). This is a lab inventory, not a
+    parallel sweep of the internet.
+    """
+    file_path = Path(path)
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except FileNotFoundError as extra:
+        raise ValidationError(f"Target file not found: {file_path}") from extra
+    except OSError as extra:
+        raise ValidationError(f"Could not read target file: {extra}") from extra
+    except UnicodeDecodeError as extra:
+        raise ValidationError("Target file must be UTF-8 text.") from extra
+
+    lines: list[str] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "#" in stripped:
+            stripped = stripped.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+        try:
+            if discover:
+                spec, _hosts = parse_discovery_targets(stripped)
+                lines.append(spec)
+            else:
+                lines.append(validate_target(stripped))
+        except ValidationError as extra:
+            raise ValidationError(f"Target file line {lineno}: {extra}") from extra
+
+    unique = list(dict.fromkeys(lines))
+    if not unique:
+        raise ValidationError("Target file has no hosts.")
+    if len(unique) > MAX_TARGET_FILE_HOSTS:
+        raise ValidationError(
+            f"Target file has at most {MAX_TARGET_FILE_HOSTS} hosts."
+        )
+    return unique
 
 
 def _expand_ipv4_network(value: str) -> tuple[ipaddress.IPv4Network, list[str]]:

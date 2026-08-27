@@ -183,6 +183,21 @@ def test_parser_accepts_history_flags() -> None:
         ["--target", "127.0.0.1", "--ports", "80", "--no-diff"]
     )
     assert silent.no_diff is True
+    listed_file = parser.parse_args(
+        ["--target-file", "hosts.txt", "--profile", "quick"]
+    )
+    assert listed_file.target_file == "hosts.txt"
+
+
+def test_run_rejects_target_file_combos() -> None:
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--target-file", "hosts.txt", "--ports", "80"])
+    with pytest.raises(SystemExit):
+        run(["--gui", "--target-file", "hosts.txt"])
+    with pytest.raises(SystemExit):
+        run(["--target-file", "hosts.txt", "--profile", "quick", "--interval", "60"])
+    with pytest.raises(SystemExit):
+        run(["--history", "--target-file", "hosts.txt"])
 
 
 def test_cli_prints_reference_notes_unless_disabled(
@@ -351,3 +366,40 @@ def test_scan_diffs_against_stored_baseline(
     assert "443" in changed
     assert run(["--target", "127.0.0.1", "--ports", "80,443", "--no-diff"]) == 0
     assert "Changes vs stored" not in capsys.readouterr().out
+
+
+def test_target_file_scans_sequentially(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    hosts = tmp_path / "hosts.txt"
+    hosts.write_text("127.0.0.1\nlocalhost\n", encoding="utf-8")
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+    seen: list[str] = []
+
+    class FakeScanner:
+        def scan(self, target: str, *_args: object, **_kwargs: object) -> ScanReport:
+            seen.append(target)
+            return ScanReport(
+                target=target,
+                resolved_ip="127.0.0.1",
+                start_port=80,
+                end_port=80,
+                timeout=0.5,
+                results=[PortScanResult(port=80, state=PortState.OPEN)],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    code = run(["--target-file", str(hosts), "--ports", "80"])
+    assert code == 0
+    assert seen == ["127.0.0.1", "localhost"]
+    output = capsys.readouterr().out
+    assert "Target 1/2" in output
+    assert "Target 2/2" in output
+    assert "sequential" in output
+    assert "2/2 target(s) succeeded" in output

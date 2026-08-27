@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from scanner.constants import SCAN_PROFILES, UDP_SCAN_PROFILES
+from scanner.constants import MAX_TARGET_FILE_HOSTS, SCAN_PROFILES, UDP_SCAN_PROFILES
 from scanner.validator import (
     ValidationError,
     parse_discovery_targets,
     parse_port_range,
     parse_ports,
+    parse_target_file,
     resolve_scan_profile,
     validate_interval,
     validate_port,
@@ -184,3 +187,43 @@ def test_interval_and_runs() -> None:
         validate_runs(0)
     with pytest.raises(ValidationError, match="between 1 and"):
         validate_runs(1001)
+
+
+def test_parse_target_file_skips_comments_and_duplicates(tmp_path: Path) -> None:
+    path = tmp_path / "hosts.txt"
+    path.write_text(
+        "# lab inventory\n"
+        "127.0.0.1\n"
+        "\n"
+        "localhost  # alias\n"
+        "127.0.0.1\n",
+        encoding="utf-8",
+    )
+    assert parse_target_file(path) == ["127.0.0.1", "localhost"]
+
+
+def test_parse_target_file_rejects_cidr_without_discover(tmp_path: Path) -> None:
+    path = tmp_path / "hosts.txt"
+    path.write_text("192.168.1.0/24\n", encoding="utf-8")
+    with pytest.raises(ValidationError, match="line 1"):
+        parse_target_file(path)
+    assert parse_target_file(path, discover=True) == ["192.168.1.0/24"]
+
+
+def test_parse_target_file_empty_and_cap(tmp_path: Path) -> None:
+    empty = tmp_path / "empty.txt"
+    empty.write_text("# none\n", encoding="utf-8")
+    with pytest.raises(ValidationError, match="no hosts"):
+        parse_target_file(empty)
+    huge = tmp_path / "huge.txt"
+    huge.write_text(
+        "\n".join(f"10.{index // 256}.{index % 256}.1" for index in range(MAX_TARGET_FILE_HOSTS + 1))
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError, match="at most"):
+        parse_target_file(huge)
+    missing = tmp_path / "missing.txt"
+    with pytest.raises(ValidationError, match="not found"):
+        parse_target_file(missing)
+
