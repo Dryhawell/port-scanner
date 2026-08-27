@@ -7,6 +7,7 @@ itself; scanning stays in the scanner package.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -53,6 +54,7 @@ from scanner.validator import (
 )
 from utils.charts import bars_ascii, bars_from_report, trend_ascii
 from utils.exporter import (
+    JSON_INDENT,
     ExportError,
     ExportFormat,
     default_output_path,
@@ -100,6 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target-file hosts.txt --profile quick\n"
             "  python main.py --target 127.0.0.1 --profile quick --exclude 80,443\n"
             "  python main.py --target 127.0.0.1 --ports 80 --json\n"
+            "  python main.py --history --json\n"
+            "  python main.py --history-id 3 --json\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -189,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print the report JSON to stdout (no file; skip the human table)",
+        help="Print JSON to stdout (a scan report, a stored run, a history list, or a diff)",
     )
     parser.add_argument(
         "--verbose",
@@ -397,8 +401,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine history query with --interval or --runs")
         if args.target_file:
             parser.error("do not combine history query with --target-file")
-        if args.json:
-            parser.error("do not combine history query with --json")
+        if args.json and (args.output or args.format):
+            parser.error("use --json for stdout, or --output/--format for a file, not both")
         query_flags = sum(
             [
                 bool(args.history),
@@ -797,10 +801,27 @@ def _run_history_query(args: argparse.Namespace, logger: logging.Logger) -> int:
         if args.history_diff is not None:
             old_id, new_id = args.history_diff
             kind, appeared, disappeared = store.diff(old_id, new_id)
+            if args.json:
+                _emit_json(
+                    {
+                        "tool": APP_NAME,
+                        "version": APP_VERSION,
+                        "old_id": old_id,
+                        "new_id": new_id,
+                        "kind": kind,
+                        "appeared": appeared,
+                        "disappeared": disappeared,
+                    }
+                )
+                return 0
             _print_stored_diff(old_id, new_id, kind, appeared, disappeared)
             return 0
         if args.history_id is not None:
             report = store.load(args.history_id)
+            if args.json:
+                sys.stdout.write(report_to_json(report))
+                sys.stdout.flush()
+                return 0
             print(f"Stored scan #{args.history_id}")
             if isinstance(report, DiscoveryReport):
                 print_discovery_report(report, show_closed=args.show_closed)
@@ -818,10 +839,41 @@ def _run_history_query(args: argparse.Namespace, logger: logging.Logger) -> int:
                 print(f"Report saved: {saved}")
             return 0
         rows = store.list_scans(target=args.target, limit=limit)
+        if args.json:
+            _emit_json(
+                {
+                    "tool": APP_NAME,
+                    "version": APP_VERSION,
+                    "target": args.target,
+                    "scans": [_summary_to_dict(item) for item in rows],
+                }
+            )
+            return 0
         _print_history_list(rows, target=args.target)
         return 0
     except HistoryError as extra:
         return _cli_error(logger, extra)
+
+
+def _summary_to_dict(item: ScanSummary) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "started_at": item.started_at.isoformat(),
+        "kind": item.kind,
+        "target": item.target,
+        "resolved_ip": item.resolved_ip,
+        "protocol": item.protocol,
+        "method": item.method,
+        "scanned": item.scanned,
+        "hits": item.hits,
+        "duration": item.duration,
+        "port_label": item.port_label,
+    }
+
+
+def _emit_json(payload: object) -> None:
+    sys.stdout.write(json.dumps(payload, indent=JSON_INDENT, ensure_ascii=True) + "\n")
+    sys.stdout.flush()
 
 
 def _parse_history_limit(raw: str) -> int:

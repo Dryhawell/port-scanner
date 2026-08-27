@@ -286,6 +286,14 @@ def test_history_list_and_show(
     shown = capsys.readouterr().out
     assert "OPEN" in shown
     assert "80" in shown
+    assert run(["--history-id", str(scan_id), "--json"]) == 0
+    stored = json.loads(capsys.readouterr().out)
+    assert stored["target"] == "127.0.0.1"
+    assert stored["scan_method"] == "tcp_connect"
+    assert run(["--history", "--json"]) == 0
+    listed_json = json.loads(capsys.readouterr().out)
+    assert listed_json["scans"][0]["id"] == scan_id
+    assert listed_json["scans"][0]["target"] == "127.0.0.1"
 
 
 def test_history_diff_cli(
@@ -330,6 +338,12 @@ def test_history_diff_cli(
     assert "443" in output
     assert "80" in output
     assert "no longer open" in output
+    assert run(["--history-diff", str(first), str(second), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["old_id"] == first
+    assert payload["new_id"] == second
+    assert 443 in payload["appeared"]
+    assert 80 in payload["disappeared"]
 
 
 def test_scan_diffs_against_stored_baseline(
@@ -458,7 +472,7 @@ def test_run_rejects_json_combos() -> None:
     with pytest.raises(SystemExit):
         run(["--target-file", "hosts.txt", "--profile", "quick", "--json"])
     with pytest.raises(SystemExit):
-        run(["--history", "--json"])
+        run(["--history", "--json", "--format", "json"])
 
 
 def test_json_prints_report_on_stdout(
