@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.17.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.18.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -35,7 +35,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Local reference notes on some OPEN ports (hardening / historical CVE ids; not a vuln scan)
 - File logging to `logs/scanner.log`
 - Unit tests that mock sockets and DNS (no internet required)
-- GitHub Actions runs pytest on push and pull requests to `main` (Python 3.12 and 3.13)
+- GitHub Actions runs ruff and pytest on push and pull requests to `main` (pytest on Python 3.12 and 3.13)
 
 ## Technologies
 
@@ -52,9 +52,10 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 | Notes | Static local table (`scanner/advisory.py`) |
 | Logging | `logging` |
 | Tests | `pytest` |
-| CI | GitHub Actions (pytest only; no live scans) |
+| Lint | `ruff` (`E`/`F`/`W`, not an auto-formatter) |
+| CI | GitHub Actions (ruff + pytest; no live scans) |
 
-Runtime scanning has **no third-party dependencies**. Install pytest only to run tests.
+Runtime scanning has **no third-party dependencies**. Install pytest to run tests; install `requirements-dev.txt` for ruff as well.
 
 ## Installation
 
@@ -64,7 +65,7 @@ cd port-scanner
 python -m pip install -r requirements.txt
 ```
 
-`requirements.txt` currently pins pytest. Tkinter ships with most CPython Windows/macOS builds.
+`requirements.txt` currently pins pytest. `requirements-dev.txt` adds ruff. Tkinter ships with most CPython Windows/macOS builds.
 
 ## Usage
 
@@ -242,7 +243,8 @@ utils/
   charts.py             ASCII / SVG bar charts from result counts
   logger.py             logs/scanner.log
 tests/                  pytest
-.github/workflows/      pytest on push / pull request (no live scans)
+ruff.toml               lint rules for CI (`ruff check`, not format)
+.github/workflows/      ruff + pytest on push / pull request (no live scans)
 reports/                generated reports and history.db (gitignored)
 logs/                   scanner.log (gitignored)
 ```
@@ -408,11 +410,13 @@ Worker count is `min(requested, port_count)`.
 ```powershell
 python -m pip install -r requirements.txt
 python -m pytest
+python -m pip install -r requirements-dev.txt
+python -m ruff check .
 ```
 
 Tests cover validation (including `--target-file` lists and `--exclude`), connect-code mapping, mocked TCP/UDP probes, mocked DNS, TCP ping discovery, service lookup (including the fallback map), banner parsing, sqlite history round-trips, ASCII/SVG charts, and local reference notes. They do not scan the public internet.
 
-The same `python -m pytest` command runs on GitHub Actions for pushes and pull requests to `main` (Python 3.12 and 3.13). CI is a unit-test gate, not a live scan of any host.
+GitHub Actions runs `python -m ruff check .` and `python -m pytest` on pushes and pull requests to `main` (pytest on Python 3.12 and 3.13). CI is a lint and unit-test gate, not a live scan of any host. Ruff is configured for errors and unused names (`E`/`F`/`W`); it does not reformat the tree.
 
 ## Limitations
 
@@ -437,7 +441,8 @@ The same `python -m pytest` command runs on GitHub Actions for pushes and pull r
 - Charts scale to the largest count in that picture; they are not a risk score or a network map
 - Reference notes are a small local table, not a CVE feed, not version-wide matching, and not a confirmation
 - PDF uses built-in Helvetica/Courier only; it is not a full print layout engine
-- GitHub Actions runs mocked unit tests only; it does not scan hosts and is not a security audit of pull requests
+- GitHub Actions runs ruff plus mocked unit tests; it does not scan hosts and is not a security audit of pull requests
+- Ruff does not enforce `ruff format` or import sorting; long help strings are allowed (`E501` ignored)
 
 ## Authorized Use
 

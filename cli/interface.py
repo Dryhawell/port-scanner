@@ -324,7 +324,7 @@ def print_discovery_report(report: DiscoveryReport, *, show_closed: bool = False
     up_count = report.count(HostState.UP)
     down_count = report.count(HostState.DOWN)
     print(f"Target: {report.spec}")
-    print(f"Method: tcp_ping (ports 80,443,22,445)")
+    print("Method: tcp_ping (ports 80,443,22,445)")
     print(f"Timeout: {report.timeout}s")
     print(f"Threads: {report.max_workers}")
     if report.duration is not None:

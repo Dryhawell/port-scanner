@@ -1,0 +1,8 @@
+# Lint gate for CI. This is not an auto-formatter: `ruff format` is not required.
+target-version = "py312"
+line-length = 100
+
+[lint]
+# E/F/W: syntax, undefined names, unused imports. E501 skipped so long help text stays readable.
+select = ["E", "F", "W"]
+ignore = ["E501"]
