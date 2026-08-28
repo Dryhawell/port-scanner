@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from cli.interface import build_parser, render_progress_bar, run
+from scanner.constants import APP_VERSION, SCAN_PROFILES, UDP_SCAN_PROFILES
 from scanner.models import PortScanResult, ScanReport
 from scanner.port import PortState
 
@@ -65,6 +66,13 @@ def test_parser_accepts_profile_or_ports() -> None:
         ["--target", "127.0.0.1", "--ports", "80", "--no-banner"]
     )
     assert skip_banner.no_banner is True
+    listed = parser.parse_args(["--list-profiles"])
+    assert listed.list_profiles is True
+    listed_udp = parser.parse_args(["--list-profiles", "--udp"])
+    assert listed_udp.list_profiles is True
+    assert listed_udp.udp is True
+    listed_json = parser.parse_args(["--list-profiles", "--json"])
+    assert listed_json.json is True
 
 
 def test_run_rejects_discover_combined_with_scan_flags() -> None:
@@ -603,3 +611,63 @@ def test_no_banner_passed_to_scanner(
     flags.clear()
     assert run(["--target", "127.0.0.1", "--ports", "80"]) == 0
     assert flags == [True]
+
+
+def test_list_profiles_prints_named_sets(capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(["--list-profiles"]) == 0
+    shown = capsys.readouterr().out
+    assert "not a vulnerability list" in shown
+    assert "TCP" in shown
+    assert "UDP" in shown
+    assert "quick" in shown
+    assert "common" in shown
+    assert "22" in shown
+    assert "53" in shown
+    assert str(SCAN_PROFILES["quick"][0]) in shown
+
+
+def test_list_profiles_udp_only(capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(["--list-profiles", "--udp"]) == 0
+    shown = capsys.readouterr().out
+    assert "UDP" in shown
+    assert "TCP" not in shown
+    assert "53" in shown
+    assert "67" in shown
+
+
+def test_list_profiles_json(capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(["--list-profiles", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["tool"] == "port-scanner"
+    assert payload["version"] == APP_VERSION
+    assert "not a vulnerability list" in payload["note"]
+    assert payload["tcp"]["quick"] == list(SCAN_PROFILES["quick"])
+    assert payload["tcp"]["common"] == list(SCAN_PROFILES["common"])
+    assert payload["udp"]["quick"] == list(UDP_SCAN_PROFILES["quick"])
+    assert payload["udp"]["common"] == list(UDP_SCAN_PROFILES["common"])
+
+
+def test_list_profiles_json_udp_only(capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(["--list-profiles", "--udp", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "tcp" not in payload
+    assert payload["udp"]["quick"] == list(UDP_SCAN_PROFILES["quick"])
+
+
+def test_run_rejects_list_profiles_combos() -> None:
+    with pytest.raises(SystemExit):
+        run(["--gui", "--list-profiles"])
+    with pytest.raises(SystemExit):
+        run(["--list-profiles", "--target", "127.0.0.1"])
+    with pytest.raises(SystemExit):
+        run(["--list-profiles", "--history"])
+    with pytest.raises(SystemExit):
+        run(["--list-profiles", "--ports", "80"])
+    with pytest.raises(SystemExit):
+        run(["--list-profiles", "--profile", "quick"])
+    with pytest.raises(SystemExit):
+        run(["--list-profiles", "--discover"])
+    with pytest.raises(SystemExit):
+        run(["--list-profiles", "--exit-open"])
+    with pytest.raises(SystemExit):
+        run(["--list-profiles", "--no-banner"])

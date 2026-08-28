@@ -30,6 +30,7 @@ from scanner.constants import (
     PROTOCOL_TCP,
     PROTOCOL_UDP,
     SCAN_PROFILES,
+    UDP_SCAN_PROFILES,
 )
 from scanner.advisory import DISCLAIMER, lookup_advisories
 from scanner.compare import live_host_delta, open_port_delta
@@ -107,6 +108,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --history-id 3 --json\n"
             "  python main.py --target 127.0.0.1 --ports 80 --json --exit-open\n"
             "  python main.py --target 127.0.0.1 --profile quick --no-banner\n"
+            "  python main.py --list-profiles\n"
+            "  python main.py --list-profiles --udp\n"
+            "  python main.py --list-profiles --json\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -126,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target",
         "-t",
-        help="IPv4, IPv6, hostname, or IPv4 CIDR with --discover (required for CLI unless --target-file)",
+        help="IPv4, IPv6, hostname, or IPv4 CIDR with --discover (required for CLI unless --target-file or --list-profiles)",
     )
     parser.add_argument(
         "--target-file",
@@ -145,6 +149,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         choices=sorted(SCAN_PROFILES),
         help="Scan a named port set: quick or common (instead of --ports)",
+    )
+    parser.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="Print named port sets (quick/common) and exit; no scan",
     )
     parser.add_argument(
         "--exclude",
@@ -169,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--udp",
         action="store_true",
-        help="UDP probe instead of TCP connect (silence is TIMEOUT / open|filtered)",
+        help="UDP probe instead of TCP connect; with --list-profiles, print UDP sets only",
     )
     parser.add_argument(
         "--discover",
@@ -196,7 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print JSON to stdout (a scan report, a stored run, a history list, or a diff)",
+        help="Print JSON to stdout (a scan report, stored history, or named profiles)",
     )
     parser.add_argument(
         "--exit-open",
@@ -402,6 +411,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine --gui with --json")
         if args.exit_open:
             parser.error("do not combine --gui with --exit-open")
+        if args.list_profiles:
+            parser.error("do not combine --gui with --list-profiles")
         from gui.app import run_app
 
         return run_app()
@@ -411,6 +422,32 @@ def run(argv: list[str] | None = None) -> int:
         or args.history_id is not None
         or args.history_diff is not None
     )
+    if args.list_profiles:
+        if history_query:
+            parser.error("do not combine --list-profiles with history flags")
+        if args.interval or args.runs:
+            parser.error("do not combine --list-profiles with --interval or --runs")
+        if args.target or args.target_file:
+            parser.error("do not combine --list-profiles with --target or --target-file")
+        if args.discover:
+            parser.error("do not combine --list-profiles with --discover")
+        if args.profile:
+            parser.error("do not combine --list-profiles with --profile")
+        if args.exclude:
+            parser.error("do not combine --list-profiles with --exclude")
+        if args.output or args.format:
+            parser.error("do not combine --list-profiles with --output or --format")
+        if args.exit_open:
+            parser.error("do not combine --list-profiles with --exit-open")
+        if args.no_banner:
+            parser.error("do not combine --list-profiles with --no-banner")
+        if args.ipv6:
+            parser.error("do not combine --list-profiles with --ipv6")
+        cli_tokens = argv if argv is not None else sys.argv[1:]
+        if _ports_flag_present(cli_tokens):
+            parser.error("do not combine --list-profiles with --ports")
+        return _run_list_profiles(args)
+
     if history_query:
         if args.interval or args.runs:
             parser.error("do not combine history query with --interval or --runs")
@@ -435,7 +472,9 @@ def run(argv: list[str] | None = None) -> int:
     if args.target and args.target_file:
         parser.error("use either --target or --target-file, not both")
     if not args.target and not args.target_file:
-        parser.error("--target or --target-file is required unless --gui or a history flag is used")
+        parser.error(
+            "--target or --target-file is required unless --gui, --list-profiles, or a history flag is used"
+        )
     if args.target_file and (args.interval or args.runs):
         parser.error("do not combine --target-file with --interval or --runs")
     if args.json and (args.output or args.format):
@@ -478,6 +517,50 @@ def run(argv: list[str] | None = None) -> int:
         code, _report = _run_scan(args, logger)
         return code
     return _run_scheduled(args, logger, interval, runs)
+
+
+def _ports_flag_present(tokens: list[str]) -> bool:
+    for token in tokens:
+        if token in ("-p", "--ports") or token.startswith("--ports="):
+            return True
+        if token.startswith("-p") and not token.startswith("--"):
+            return True
+    return False
+
+
+def _run_list_profiles(args: argparse.Namespace) -> int:
+    tcp = {name: list(ports) for name, ports in SCAN_PROFILES.items()}
+    udp = {name: list(ports) for name, ports in UDP_SCAN_PROFILES.items()}
+    note = (
+        "Named port sets for --profile. These are common listening ports, "
+        "not a vulnerability list."
+    )
+    if args.json:
+        payload: dict[str, object] = {
+            "tool": "port-scanner",
+            "version": APP_VERSION,
+            "note": note,
+        }
+        if args.udp:
+            payload["udp"] = udp
+        else:
+            payload["tcp"] = tcp
+            payload["udp"] = udp
+        _emit_json(payload)
+        return 0
+    print(note)
+    print()
+    if not args.udp:
+        _print_profile_table("TCP", tcp)
+        print()
+    _print_profile_table("UDP", udp)
+    return 0
+
+
+def _print_profile_table(protocol: str, profiles: dict[str, list[int]]) -> None:
+    for name, ports in profiles.items():
+        preview = ",".join(str(port) for port in ports)
+        print(f"{protocol}  {name:<8}  {len(ports):>3} ports  {preview}")
 
 
 def _run_target_file(args: argparse.Namespace, logger: logging.Logger) -> int:
