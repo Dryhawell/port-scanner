@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.24.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.25.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -27,7 +27,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Service-name hint: OS `getservbyport()` first, then a small fallback map for ports some tables omit
 - Passive banner grab (read only; no HTTP/SMTP/TLS probes) with ASCII and binary greeting parse (`--no-banner` skips the recv)
 - Per-port latency with `time.perf_counter()`
-- CLI (`argparse`) with a live progress bar, plus a dark-themed Tkinter GUI
+- CLI (`argparse`) with a live progress bar (skip with `--quiet` / `-q`), plus a dark-themed Tkinter GUI
 - Scheduled repeats in this process (`--interval` 5–86400s, `--runs` or Ctrl+C), with a diff of newly open / gone ports
 - JSON, CSV, HTML, and simple PDF reports under `reports/`
 - `--json` prints a scan report, a stored run, a history list, a history diff, or named profiles to stdout (no file; human table skipped) so you can pipe to `jq`
@@ -98,6 +98,8 @@ python main.py --target 127.0.0.1 --profile quick --no-banner
 python main.py --list-profiles
 python main.py --list-profiles --udp
 python main.py --list-profiles --json
+python main.py --target 127.0.0.1 --ports 80 --quiet
+python main.py --target 127.0.0.1 --ports 80 --json --quiet
 ```
 
 | Flag | Meaning |
@@ -119,7 +121,8 @@ python main.py --list-profiles --json
 | `--json` | Print JSON to stdout (scan report, `--history` list, `--history-id` run, `--history-diff`, or `--list-profiles`). No file. Do not combine with `--output`, `--format`, `--gui`, `--target-file`, or `--interval` / `--runs` |
 | `--exit-open` | Exit `2` if any OPEN port (or UP host) is found; `0` if none. Validation/runtime errors stay `1`. Do not combine with `--gui` or history query flags |
 | `--no-banner` | Skip passive TCP `recv` on OPEN ports. Do not combine with `--udp` or `--discover` |
-| `--verbose` / `-v` | DEBUG lines on the console |
+| `--quiet` / `-q` | Less chatter: no progress bar, authorized-use line, `Scanning...` status, history/baseline notices. Result table (or `--json`) and errors stay. Do not combine with `--verbose` or `--gui` |
+| `--verbose` / `-v` | DEBUG lines on the console. Do not combine with `--quiet` |
 | `--interval` | Seconds to wait between authorized repeats (`5`–`86400`). Process stays in the foreground |
 | `--runs` | How many repeats when `--interval` is set (`1`–`1000`). Omit to loop until Ctrl+C |
 | `--history` | List stored scans from `reports/history.db` (optional `--target` filter, `--history-limit`) |
@@ -130,7 +133,7 @@ python main.py --list-profiles --json
 | `--no-diff` | Do not compare this run to the last stored scan of the same target |
 | `--gui` | Open the Tkinter UI |
 
-Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. They are still stored in reports. During discovery, DOWN hosts are hidden the same way. During a CLI scan, stderr shows a live ASCII progress bar (`Progress: [########........]  50%  Found: N open ports` or `live hosts`). `--verbose` skips the bar so DEBUG lines stay readable.
+Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. They are still stored in reports. During discovery, DOWN hosts are hidden the same way. During a CLI scan, stderr shows a live ASCII progress bar (`Progress: [########........]  50%  Found: N open ports` or `live hosts`). `--verbose` skips the bar so DEBUG lines stay readable; `--quiet` skips the bar and other status chatter.
 
 ## CLI Examples
 
@@ -172,13 +175,16 @@ python main.py --target 127.0.0.1 --profile quick --no-banner
 python main.py --list-profiles
 python main.py --list-profiles --udp
 python main.py --list-profiles --json
+python main.py --target 127.0.0.1 --ports 80 --quiet
+python main.py --target 127.0.0.1 --ports 80 --json --quiet
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```
 
-`--json` writes one JSON document to stdout. A live scan or `--history-id` uses the same report payload as a `.json` file. `--history --json` lists stored summaries. `--history-diff --json` lists appeared / disappeared ports or hosts. `--list-profiles --json` dumps the named TCP/UDP port sets (UDP only if `--udp` is set). Progress and the authorized-use line go to stderr so `jq` can read stdout:
+`--json` writes one JSON document to stdout. A live scan or `--history-id` uses the same report payload as a `.json` file. `--history --json` lists stored summaries. `--history-diff --json` lists appeared / disappeared ports or hosts. `--list-profiles --json` dumps the named TCP/UDP port sets (UDP only if `--udp` is set). Progress and the authorized-use line go to stderr so `jq` can read stdout. Add `--quiet` to silence that stderr chatter:
 
 ```powershell
 python main.py --target 127.0.0.1 --ports 80 --json | jq .open_ports
+python main.py --target 127.0.0.1 --ports 80 --json --quiet | jq .open_ports
 python main.py --history --json | jq .scans
 python main.py --history-id 3 --json | jq .open_ports
 python main.py --list-profiles --json | jq .tcp.quick
@@ -481,6 +487,7 @@ GitHub Actions runs `python -m ruff check .` on Ubuntu and `python -m pytest` on
 - Reference notes are a small local table, not a CVE feed, not version-wide matching, and not a confirmation
 - `--json` is one JSON document on stdout. A live scan and `--history-id` share the report schema; `--history` and `--history-diff` use smaller list/diff objects; `--list-profiles --json` dumps the named TCP/UDP sets. It is not a file export, not JSONL, and not combined with `--target-file` or `--interval`
 - `--list-profiles` is a catalog of named port sets for `--profile`, not a scan and not a vulnerability list. It does not open sockets
+- `--quiet` hides progress and status lines only; it does not change scan behavior, hide OPEN results, or replace `--json`
 - `--exit-open` is a script helper, not an alert: CLOSED and TIMEOUT do not trigger exit `2`. Default scans still exit `0` when they finish
 - GitHub Actions runs ruff plus mocked unit tests on Ubuntu and Windows; it does not scan hosts and is not a security audit of pull requests
 - Ruff does not enforce `ruff format` or import sorting; long help strings are allowed (`E501` ignored)

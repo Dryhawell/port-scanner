@@ -111,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --list-profiles\n"
             "  python main.py --list-profiles --udp\n"
             "  python main.py --list-profiles --json\n"
+            "  python main.py --target 127.0.0.1 --ports 80 --quiet\n"
+            "  python main.py --target 127.0.0.1 --ports 80 --json --quiet\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -222,6 +224,15 @@ def build_parser() -> argparse.ArgumentParser:
         "-v",
         action="store_true",
         help="Print DEBUG log lines to the console (the log file always stores DEBUG)",
+    )
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        help=(
+            "Less console chatter: no progress bar, authorized-use line, "
+            "Scanning... status, history/baseline notices (results and errors stay)"
+        ),
     )
     parser.add_argument(
         "--interval",
@@ -400,6 +411,8 @@ def _print_progress(completed: int, total: int, open_count: int) -> None:
 def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.quiet and args.verbose:
+        parser.error("use either --quiet or --verbose, not both")
     if args.gui:
         if args.interval or args.runs:
             parser.error("do not combine --gui with --interval or --runs")
@@ -413,6 +426,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine --gui with --exit-open")
         if args.list_profiles:
             parser.error("do not combine --gui with --list-profiles")
+        if args.quiet:
+            parser.error("do not combine --gui with --quiet")
         from gui.app import run_app
 
         return run_app()
@@ -569,18 +584,20 @@ def _run_target_file(args: argparse.Namespace, logger: logging.Logger) -> int:
     except ValidationError as extra:
         return _cli_error(logger, extra)
 
-    print("Use this tool only on systems you are authorized to test.")
-    print(
-        f"Scanning {len(targets)} authorized target(s) from {args.target_file} "
-        "— sequential, not a parallel sweep."
-    )
-    sys.stdout.flush()
+    if not args.quiet:
+        print("Use this tool only on systems you are authorized to test.")
+        print(
+            f"Scanning {len(targets)} authorized target(s) from {args.target_file} "
+            "— sequential, not a parallel sweep."
+        )
+        sys.stdout.flush()
 
     failures = 0
     saw_open = False
     for index, target in enumerate(targets, start=1):
-        print(f"--- Target {index}/{len(targets)}: {target} ---")
-        sys.stdout.flush()
+        if not args.quiet:
+            print(f"--- Target {index}/{len(targets)}: {target} ---")
+            sys.stdout.flush()
         host_args = argparse.Namespace(**vars(args))
         host_args.target = target
         if args.discover:
@@ -606,7 +623,8 @@ def _run_target_file(args: argparse.Namespace, logger: logging.Logger) -> int:
         elif code != 0:
             failures += 1
 
-    print(f"Done. {len(targets) - failures}/{len(targets)} target(s) succeeded.")
+    if not args.quiet:
+        print(f"Done. {len(targets) - failures}/{len(targets)} target(s) succeeded.")
     if failures:
         return 1
     return EXIT_OPEN if saw_open else 0
@@ -618,41 +636,44 @@ def _run_scheduled(
     interval: float,
     runs: int | None,
 ) -> int:
-    print("Use this tool only on systems you are authorized to test.")
-    print(
-        "Repeating an authorized scan in this process — not a background service, "
-        "cron job, or persistence mechanism."
-    )
-    if runs is None:
-        print(f"Interval: {interval}s  (Ctrl+C to stop)")
-    else:
-        print(f"Interval: {interval}s  Runs: {runs}")
-    sys.stdout.flush()
+    if not args.quiet:
+        print("Use this tool only on systems you are authorized to test.")
+        print(
+            "Repeating an authorized scan in this process — not a background service, "
+            "cron job, or persistence mechanism."
+        )
+        if runs is None:
+            print(f"Interval: {interval}s  (Ctrl+C to stop)")
+        else:
+            print(f"Interval: {interval}s  Runs: {runs}")
+        sys.stdout.flush()
 
     previous: ScanReport | DiscoveryReport | None = None
     run_index = 0
     while True:
         run_index += 1
-        if runs is not None:
-            print(f"--- Run {run_index}/{runs} ---")
-        else:
-            print(f"--- Run {run_index} ---")
-        sys.stdout.flush()
+        if not args.quiet:
+            if runs is not None:
+                print(f"--- Run {run_index}/{runs} ---")
+            else:
+                print(f"--- Run {run_index} ---")
+            sys.stdout.flush()
         if args.discover:
             code, report = _run_discovery(args, logger, run_index=run_index, announce=False)
         else:
             code, report = _run_scan(args, logger, run_index=run_index, announce=False)
         if report is None or (code not in {0, EXIT_OPEN}):
             return code
-        if previous is not None:
+        if previous is not None and not args.quiet:
             _print_delta(previous, report)
         previous = report
         if runs is not None and run_index >= runs:
             return code
-        print(
-            f"Waiting {interval:g}s until next run (Ctrl+C to stop).",
-            file=sys.stderr,
-        )
+        if not args.quiet:
+            print(
+                f"Waiting {interval:g}s until next run (Ctrl+C to stop).",
+                file=sys.stderr,
+            )
         try:
             time.sleep(interval)
         except KeyboardInterrupt:
@@ -710,22 +731,23 @@ def _run_scan(
     except ValidationError as exc:
         return _cli_error(logger, exc), None
 
-    if announce:
+    if announce and not args.quiet:
         print(
             "Use this tool only on systems you are authorized to test.",
             file=sys.stderr if args.json else sys.stdout,
         )
-    if not args.json:
+    if not args.json and not args.quiet:
         print(f"Scanning {target}...")
         sys.stdout.flush()
 
     open_found = 0
+    show_progress = not args.verbose and not args.quiet
 
     def on_progress(completed: int, total: int, result: PortScanResult) -> None:
         nonlocal open_found
         if result.state is PortState.OPEN:
             open_found += 1
-        if not args.verbose:
+        if show_progress:
             _print_progress(completed, total, open_found)
 
     try:
@@ -740,18 +762,18 @@ def _run_scan(
             with_banner=not args.no_banner,
         )
     except ValidationError as exc:
-        _end_progress_line(args.verbose)
+        _end_progress_line(show_progress)
         return _cli_error(logger, exc), None
     except ScannerError as exc:
-        _end_progress_line(args.verbose)
+        _end_progress_line(show_progress)
         return _cli_error(logger, exc), None
     except KeyboardInterrupt:
-        _end_progress_line(args.verbose)
+        _end_progress_line(show_progress)
         logger.warning("Scan interrupted.")
         print("Scan interrupted.", file=sys.stderr)
         return 130, None
 
-    _end_progress_line(args.verbose)
+    _end_progress_line(show_progress)
     _print_scan_result(report, args)
 
     try:
@@ -764,11 +786,11 @@ def _run_scan(
     except ExportError as exc:
         return _cli_error(logger, exc), None
 
-    if saved is not None:
+    if saved is not None and not args.quiet:
         print(f"Report saved: {saved}")
-    if not args.json:
+    if not args.json and not args.quiet:
         _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
-    _maybe_record(report, args.no_history, quiet=args.json)
+    _maybe_record(report, args.no_history, quiet=args.json or args.quiet)
     return _scan_exit_code(args, report), report
 
 
@@ -780,22 +802,23 @@ def _run_discovery(
     export_index: int | None = None,
     announce: bool = True,
 ) -> tuple[int, DiscoveryReport | None]:
-    if announce:
+    if announce and not args.quiet:
         print(
             "Use this tool only on systems you are authorized to test.",
             file=sys.stderr if args.json else sys.stdout,
         )
-    if not args.json:
+    if not args.json and not args.quiet:
         print(f"Discovering {args.target}...")
         sys.stdout.flush()
 
     live_found = 0
+    show_progress = not args.verbose and not args.quiet
 
     def on_progress(completed: int, total: int, result: HostDiscoveryResult) -> None:
         nonlocal live_found
         if result.state is HostState.UP:
             live_found += 1
-        if not args.verbose:
+        if show_progress:
             _print_discovery_progress(completed, total, live_found)
 
     try:
@@ -807,18 +830,18 @@ def _run_discovery(
             prefer_ipv6=args.ipv6,
         )
     except ValidationError as exc:
-        _end_progress_line(args.verbose)
+        _end_progress_line(show_progress)
         return _cli_error(logger, exc), None
     except ScannerError as exc:
-        _end_progress_line(args.verbose)
+        _end_progress_line(show_progress)
         return _cli_error(logger, exc), None
     except KeyboardInterrupt:
-        _end_progress_line(args.verbose)
+        _end_progress_line(show_progress)
         logger.warning("Discovery interrupted.")
         print("Scan interrupted.", file=sys.stderr)
         return 130, None
 
-    _end_progress_line(args.verbose)
+    _end_progress_line(show_progress)
     _print_scan_result(report, args)
 
     try:
@@ -831,11 +854,11 @@ def _run_discovery(
     except ExportError as exc:
         return _cli_error(logger, exc), None
 
-    if saved is not None:
+    if saved is not None and not args.quiet:
         print(f"Report saved: {saved}")
-    if not args.json:
+    if not args.json and not args.quiet:
         _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
-    _maybe_record(report, args.no_history, quiet=args.json)
+    _maybe_record(report, args.no_history, quiet=args.json or args.quiet)
     return _scan_exit_code(args, report), report
 
 
@@ -1098,8 +1121,8 @@ def _resolve_format(output: str | None, fmt: str | None) -> ExportFormat:
     return ExportFormat.JSON
 
 
-def _end_progress_line(verbose: bool) -> None:
-    if not verbose:
+def _end_progress_line(show_progress: bool) -> None:
+    if show_progress:
         print(file=sys.stderr)
 
 

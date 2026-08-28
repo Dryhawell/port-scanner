@@ -73,6 +73,10 @@ def test_parser_accepts_profile_or_ports() -> None:
     assert listed_udp.udp is True
     listed_json = parser.parse_args(["--list-profiles", "--json"])
     assert listed_json.json is True
+    quiet = parser.parse_args(["--target", "127.0.0.1", "--ports", "80", "--quiet"])
+    assert quiet.quiet is True
+    quiet_short = parser.parse_args(["--target", "127.0.0.1", "--ports", "80", "-q"])
+    assert quiet_short.quiet is True
 
 
 def test_run_rejects_discover_combined_with_scan_flags() -> None:
@@ -671,3 +675,78 @@ def test_run_rejects_list_profiles_combos() -> None:
         run(["--list-profiles", "--exit-open"])
     with pytest.raises(SystemExit):
         run(["--list-profiles", "--no-banner"])
+
+
+def test_quiet_suppresses_chatter(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    recorded: list[int] = []
+
+    def fake_record(_report: object) -> int:
+        recorded.append(1)
+        return 9
+
+    monkeypatch.setattr("cli.interface.record_report", fake_record)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=80,
+                end_port=80,
+                timeout=0.5,
+                results=[PortScanResult(port=80, state=PortState.OPEN)],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "80", "--quiet"]) == 0
+    captured = capsys.readouterr()
+    assert "authorized" not in captured.out.lower()
+    assert "Scanning" not in captured.out
+    assert "History recorded" not in captured.out
+    assert "Progress:" not in captured.err
+    assert "Target:" in captured.out
+    assert recorded == [1]
+
+
+def test_quiet_with_json_keeps_stdout_clean(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=80,
+                end_port=80,
+                timeout=0.5,
+                results=[PortScanResult(port=80, state=PortState.CLOSED)],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "80", "--json", "--quiet"]) == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["target"] == "127.0.0.1"
+    assert "authorized" not in captured.err.lower()
+    assert "Progress:" not in captured.err
+
+
+def test_run_rejects_quiet_combos() -> None:
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--ports", "80", "--quiet", "--verbose"])
+    with pytest.raises(SystemExit):
+        run(["--gui", "--quiet"])
