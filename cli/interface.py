@@ -106,6 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --history --json\n"
             "  python main.py --history-id 3 --json\n"
             "  python main.py --target 127.0.0.1 --ports 80 --json --exit-open\n"
+            "  python main.py --target 127.0.0.1 --profile quick --no-banner\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -201,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--exit-open",
         action="store_true",
         help="Exit 2 if any OPEN port (or UP host) is found; 0 if none. Errors stay 1",
+    )
+    parser.add_argument(
+        "--no-banner",
+        action="store_true",
+        help="Skip passive TCP banner recv on OPEN ports (faster; no greeting parse)",
     )
     parser.add_argument(
         "--verbose",
@@ -444,6 +450,10 @@ def run(argv: list[str] | None = None) -> int:
         parser.error("do not combine --discover with --ports or --profile")
     if args.discover and args.exclude:
         parser.error("do not combine --discover with --exclude")
+    if args.discover and args.no_banner:
+        parser.error("host discovery does not grab banners; do not combine --discover with --no-banner")
+    if args.udp and args.no_banner:
+        parser.error("UDP probes do not grab TCP banners; --no-banner is TCP-only")
     if args.ports and args.profile:
         parser.error("use either --ports or --profile, not both")
     if not args.discover and not args.ports and not args.profile:
@@ -644,6 +654,7 @@ def _run_scan(
             ports=port_list,
             prefer_ipv6=args.ipv6,
             protocol=protocol,
+            with_banner=not args.no_banner,
         )
     except ValidationError as exc:
         _end_progress_line(args.verbose)

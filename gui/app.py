@@ -170,6 +170,7 @@ class ScannerApp:
         self.protocol_var = tk.StringVar(value="TCP")
         self.discover_var = tk.BooleanVar(value=False)
         self.ipv6_var = tk.BooleanVar(value=False)
+        self.no_banner_var = tk.BooleanVar(value=False)
         self.interval_var = tk.StringVar(value="")
         self.runs_var = tk.StringVar(value="1")
         self.exclude_var = tk.StringVar(value="")
@@ -235,6 +236,20 @@ class ScannerApp:
             discover_cell,
             text="Host discovery",
             variable=self.discover_var,
+            bg=PANEL,
+            fg=FG,
+            selectcolor=ENTRY_BG,
+            activebackground=PANEL,
+            activeforeground=FG,
+            highlightthickness=0,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w")
+        banner_cell = tk.Frame(inner, bg=PANEL)
+        banner_cell.grid(row=2, column=3, sticky="w", padx=8, pady=(0, 4))
+        tk.Checkbutton(
+            banner_cell,
+            text="Skip banners",
+            variable=self.no_banner_var,
             bg=PANEL,
             fg=FG,
             selectcolor=ENTRY_BG,
@@ -454,6 +469,7 @@ class ScannerApp:
         interval_raw = self.interval_var.get().strip()
         runs_raw = self.runs_var.get().strip() or "1"
         exclude = self.exclude_var.get()
+        no_banner = bool(self.no_banner_var.get())
         try:
             interval = validate_interval(interval_raw) if interval_raw else None
             runs = validate_runs(runs_raw)
@@ -464,6 +480,18 @@ class ScannerApp:
             messagebox.showerror(
                 "Invalid input",
                 "Host discovery uses a fixed TCP-ping set. Clear Exclude ports first.",
+            )
+            return
+        if discover and no_banner:
+            messagebox.showerror(
+                "Invalid input",
+                "Host discovery does not grab banners. Uncheck Skip banners.",
+            )
+            return
+        if protocol.strip().upper() == "UDP" and no_banner:
+            messagebox.showerror(
+                "Invalid input",
+                "UDP probes do not grab TCP banners. Uncheck Skip banners or use TCP.",
             )
             return
         if runs > 1 and interval is None:
@@ -500,6 +528,7 @@ class ScannerApp:
                 interval,
                 runs,
                 exclude,
+                no_banner,
             ),
             daemon=True,
             name="scan-worker",
@@ -521,6 +550,7 @@ class ScannerApp:
         interval: float | None,
         runs: int,
         exclude: str,
+        no_banner: bool,
     ) -> None:
         previous: ScanReport | DiscoveryReport | None = None
         total_runs = max(1, runs)
@@ -558,6 +588,7 @@ class ScannerApp:
                 ports=port_list,
                 prefer_ipv6=prefer_ipv6,
                 protocol=scan_protocol,
+                with_banner=not no_banner,
             )
 
         for index in range(1, total_runs + 1):

@@ -179,6 +179,28 @@ def test_scan_collects_sorted_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report.duration is not None
 
 
+def test_scan_can_skip_tcp_banners(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "scanner.scanner.resolve_host",
+        lambda _target, prefer_ipv6=False: ("127.0.0.1", socket.AF_INET),
+    )
+    monkeypatch.setattr("scanner.scanner.lookup_service", lambda _port, _protocol="tcp": None)
+    flags: list[bool] = []
+
+    def fake_probe(
+        _host: str,
+        port: int,
+        _timeout: float,
+        **kwargs: object,
+    ) -> PortScanResult:
+        flags.append(bool(kwargs.get("with_banner", True)))
+        return PortScanResult(port=port, state=PortState.OPEN, response_time=0.01)
+
+    monkeypatch.setattr("scanner.scanner.probe_tcp_port", fake_probe)
+    TcpConnectScanner().scan("127.0.0.1", ports=[80], timeout=0.5, with_banner=False)
+    assert flags == [False]
+
+
 def test_scan_accepts_explicit_port_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "scanner.scanner.resolve_host",

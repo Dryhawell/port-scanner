@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.22.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.23.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -24,7 +24,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Concurrent TCP connect or UDP probe scan via `ThreadPoolExecutor` (default 50 workers, max 200)
 - OPEN / CLOSED / TIMEOUT from TCP `connect_ex` / `SO_ERROR`, or from UDP reply vs ICMP unreachable
 - Service-name hint: OS `getservbyport()` first, then a small fallback map for ports some tables omit
-- Passive banner grab (read only; no HTTP/SMTP/TLS probes) with ASCII and binary greeting parse
+- Passive banner grab (read only; no HTTP/SMTP/TLS probes) with ASCII and binary greeting parse (`--no-banner` skips the recv)
 - Per-port latency with `time.perf_counter()`
 - CLI (`argparse`) with a live progress bar, plus a dark-themed Tkinter GUI
 - Scheduled repeats in this process (`--interval` 5–86400s, `--runs` or Ctrl+C), with a diff of newly open / gone ports
@@ -93,6 +93,7 @@ python main.py --target 127.0.0.1 --ports 80 --json
 python main.py --history --json
 python main.py --history-id 3 --json
 python main.py --target 127.0.0.1 --ports 80 --json --exit-open
+python main.py --target 127.0.0.1 --profile quick --no-banner
 ```
 
 | Flag | Meaning |
@@ -106,12 +107,13 @@ python main.py --target 127.0.0.1 --ports 80 --json --exit-open
 | `--threads` | Max workers, `1-200` (default `50`) |
 | `--ipv6` | Resolve hostnames to IPv6 (AAAA). Literals keep their own family |
 | `--udp` | UDP probe instead of TCP connect |
-| `--discover` / `-d` | TCP ping instead of a port scan (do not combine with `--udp`, `--ports`, `--profile`, or `--exclude`) |
+| `--discover` / `-d` | TCP ping instead of a port scan (do not combine with `--udp`, `--ports`, `--profile`, `--exclude`, or `--no-banner`) |
 | `--show-closed` | Print CLOSED and TIMEOUT, or DOWN hosts during discovery |
 | `--output` / `-o` | Report file path |
 | `--format` / `-f` | `json`, `csv`, `html`, or `pdf` (writes a file; default json when `--output` is set) |
 | `--json` | Print JSON to stdout (scan report, `--history` list, `--history-id` run, or `--history-diff`). No file. Do not combine with `--output`, `--format`, `--gui`, `--target-file`, or `--interval` / `--runs` |
 | `--exit-open` | Exit `2` if any OPEN port (or UP host) is found; `0` if none. Validation/runtime errors stay `1`. Do not combine with `--gui` or history query flags |
+| `--no-banner` | Skip passive TCP `recv` on OPEN ports. Do not combine with `--udp` or `--discover` |
 | `--verbose` / `-v` | DEBUG lines on the console |
 | `--interval` | Seconds to wait between authorized repeats (`5`–`86400`). Process stays in the foreground |
 | `--runs` | How many repeats when `--interval` is set (`1`–`1000`). Omit to loop until Ctrl+C |
@@ -161,6 +163,7 @@ python main.py --history --json
 python main.py --history-id 3 --json
 python main.py --history-diff 3 4 --json
 python main.py --target 127.0.0.1 --ports 80 --json --exit-open
+python main.py --target 127.0.0.1 --profile quick --no-banner
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```
 
@@ -190,7 +193,7 @@ With `--discover`, a line may be an IPv4 CIDR (`192.168.1.0/24`). Without `--dis
 python main.py --gui
 ```
 
-Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Exclude ports**, **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner, Notes. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). **Exclude ports** uses the same syntax as `--ports` and is ignored (rejected) during host discovery. Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE REPORT** writes HTML or PDF (the file extension chooses the format). **HISTORY** lists stored runs from `reports/history.db`; double-click or **LOAD** to show one in the table. A bar chart under the progress bar shows OPEN / CLOSED / TIMEOUT (or UP / DOWN); the history window charts hits across stored runs. A single scan’s status line can include `vs history #N` when a previous stored run of the same target exists. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
+Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Exclude ports**, **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Skip banners**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner, Notes. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). **Exclude ports** uses the same syntax as `--ports` and is ignored (rejected) during host discovery. **Skip banners** skips the passive TCP recv (rejected with UDP or host discovery). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE REPORT** writes HTML or PDF (the file extension chooses the format). **HISTORY** lists stored runs from `reports/history.db`; double-click or **LOAD** to show one in the table. A bar chart under the progress bar shows OPEN / CLOSED / TIMEOUT (or UP / DOWN); the history window charts hits across stored runs. A single scan’s status line can include `vs history #N` when a previous stored run of the same target exists. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The GUI still takes **one target**. Use `--target-file` on the CLI for a small authorized inventory.
 
@@ -280,7 +283,7 @@ Interfaces never open sockets themselves. They call `TcpConnectScanner` or `disc
 2. Resolve hostname to IPv4 (A) or IPv6 (AAAA) with `socket.getaddrinfo`. Literals skip DNS. Dual-stack names prefer IPv4 unless `--ipv6` / Prefer IPv6. CIDR discovery expands IPv4 hosts and skips DNS.
 3. Probe each host (TCP ping) or each port concurrently (TCP connect or UDP datagram, bounded thread pool).
 4. Map the outcome to UP / DOWN, or OPEN / CLOSED / TIMEOUT.
-5. For OPEN TCP ports, look up a service name (OS table, then fallback map). If the peer speaks first, classify that greeting (ASCII or a few binary signatures). UDP OPEN ports get a table/fallback name if known; there is no TCP-style banner parse. Discovery does not grab banners. OPEN ports may also get a **local reference note** (hardening or a historical CVE id). That is a table lookup, not a live CVE feed and not a confirmation.
+5. For OPEN TCP ports, look up a service name (OS table, then fallback map). If the peer speaks first, classify that greeting (ASCII or a few binary signatures). `--no-banner` skips that recv: OPEN/CLOSED/TIMEOUT still apply, product/version notes that need a greeting do not. UDP OPEN ports get a table/fallback name if known; there is no TCP-style banner parse. Discovery does not grab banners. OPEN ports may also get a **local reference note** (hardening or a historical CVE id). That is a table lookup, not a live CVE feed and not a confirmation.
 6. Sort results and print, export (JSON, CSV, HTML, or PDF), or show in the GUI. `--json` writes a JSON document to stdout instead of the human table (progress stays on stderr). `--history` / `--history-id` / `--history-diff` accept `--json` the same way. HTML includes an SVG count chart; the CLI prints ASCII bars.
 7. Record the run in `reports/history.db` unless `--no-history` is set. If an older stored scan of the same target exists, print a baseline diff (ports probed in both runs only). `--interval` run 2+ diffs in-process instead.
 8. If `--interval` is set, wait and repeat. After the second run, print ports (or hosts) that appeared or disappeared.
@@ -460,6 +463,7 @@ GitHub Actions runs `python -m ruff check .` on Ubuntu and `python -m pytest` on
 - UDP payload is a null byte, not a protocol handshake
 - Service names are table lookups plus a small fallback map, not protocol fingerprinting
 - Banner parsing is heuristic and passive; HTTP/TLS often send nothing until the client speaks
+- `--no-banner` skips TCP greeting recv only; it is not stealth, and version-based notes that need a banner will not appear
 - TIMEOUT vs CLOSED depends on the OS and firewall
 - Repeats run in the foreground; this is not a system scheduler or a persistence mechanism
 - Scan history is a local sqlite file, not an alerting platform or a remote archive

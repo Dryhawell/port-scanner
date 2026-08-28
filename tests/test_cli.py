@@ -61,6 +61,10 @@ def test_parser_accepts_profile_or_ports() -> None:
         ["--target", "127.0.0.1", "--ports", "80", "--exit-open"]
     )
     assert exit_open.exit_open is True
+    skip_banner = parser.parse_args(
+        ["--target", "127.0.0.1", "--ports", "80", "--no-banner"]
+    )
+    assert skip_banner.no_banner is True
 
 
 def test_run_rejects_discover_combined_with_scan_flags() -> None:
@@ -72,6 +76,10 @@ def test_run_rejects_discover_combined_with_scan_flags() -> None:
         run(["--target", "127.0.0.1", "--discover", "--profile", "quick"])
     with pytest.raises(SystemExit):
         run(["--target", "127.0.0.1", "--discover", "--exclude", "80"])
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--discover", "--no-banner"])
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--udp", "--ports", "53", "--no-banner"])
 
 
 def test_parser_accepts_interval_and_runs() -> None:
@@ -565,3 +573,33 @@ def test_exit_open_returns_zero_when_closed(
 
     monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
     assert run(["--target", "127.0.0.1", "--ports", "80", "--exit-open"]) == 0
+
+
+def test_no_banner_passed_to_scanner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+    flags: list[bool] = []
+
+    class FakeScanner:
+        def scan(self, *_args: object, **kwargs: object) -> ScanReport:
+            flags.append(bool(kwargs.get("with_banner", True)))
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=80,
+                end_port=80,
+                timeout=0.5,
+                results=[PortScanResult(port=80, state=PortState.OPEN)],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "80", "--no-banner"]) == 0
+    assert flags == [False]
+    flags.clear()
+    assert run(["--target", "127.0.0.1", "--ports", "80"]) == 0
+    assert flags == [True]

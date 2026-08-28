@@ -316,6 +316,7 @@ class TcpConnectScanner:
         ports: Sequence[int] | None = None,
         prefer_ipv6: bool = False,
         protocol: str = PROTOCOL_TCP,
+        with_banner: bool = True,
     ) -> ScanReport:
         """Validate input, resolve DNS, then probe ports concurrently."""
         cleaned_target = validate_target(target)
@@ -331,7 +332,7 @@ class TcpConnectScanner:
         start = port_list[0]
         end = port_list[-1]
         logger.info(
-            "Scan started. target=%s resolved_ip=%s ip_version=%s protocol=%s ports=%s-%s count=%s timeout=%s threads=%s",
+            "Scan started. target=%s resolved_ip=%s ip_version=%s protocol=%s ports=%s-%s count=%s timeout=%s threads=%s banners=%s",
             cleaned_target,
             resolved_ip,
             ip_version,
@@ -341,6 +342,7 @@ class TcpConnectScanner:
             port_count,
             timeout_seconds,
             workers,
+            with_banner and scan_protocol == PROTOCOL_TCP,
         )
         started_at = datetime.now(timezone.utc)
         started = time.perf_counter()
@@ -352,6 +354,7 @@ class TcpConnectScanner:
             on_progress,
             family,
             scan_protocol,
+            with_banner=with_banner,
         )
         duration = time.perf_counter() - started
         results.sort(key=lambda item: item.port)
@@ -414,12 +417,15 @@ def _scan_ports_concurrently(
     on_progress: ProgressCallback | None = None,
     family: int = socket.AF_INET,
     protocol: str = PROTOCOL_TCP,
+    with_banner: bool = True,
 ) -> list[PortScanResult]:
     """Submit one probe per port and collect results as they finish."""
     results: list[PortScanResult] = []
     total = len(ports)
-    probe_fn = probe_udp_port if protocol == PROTOCOL_UDP else probe_tcp_port
-    probe = partial(probe_fn, family=family)
+    if protocol == PROTOCOL_UDP:
+        probe = partial(probe_udp_port, family=family)
+    else:
+        probe = partial(probe_tcp_port, family=family, with_banner=with_banner)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(probe, host, port, timeout)
