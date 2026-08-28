@@ -115,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --list-profiles --json\n"
             "  python main.py --target 127.0.0.1 --ports 80 --quiet\n"
             "  python main.py --target 127.0.0.1 --ports 80 --json --quiet\n"
+            "  python main.py --target 127.0.0.1 --ports 1-100 --json --open-only\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -200,6 +201,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print CLOSED/TIMEOUT ports, or DOWN hosts during discovery",
     )
     parser.add_argument(
+        "--open-only",
+        action="store_true",
+        help=(
+            "In JSON/CSV/HTML/PDF (and --json), include only OPEN ports or UP hosts; "
+            "summary counts stay full. Do not combine with --show-closed"
+        ),
+    )
+    parser.add_argument(
         "--output",
         "-o",
         help="Report file path. Defaults to reports/scan_<timestamp>.<format> when --format is set",
@@ -213,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print JSON to stdout (a scan report, stored history, or named profiles)",
+        help="Print JSON to stdout (a scan report, stored history, or named profiles; see --open-only)",
     )
     parser.add_argument(
         "--exit-open",
@@ -419,6 +428,8 @@ def run(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.quiet and args.verbose:
         parser.error("use either --quiet or --verbose, not both")
+    if args.open_only and args.show_closed:
+        parser.error("use either --open-only or --show-closed, not both")
     if args.gui:
         if args.interval or args.runs:
             parser.error("do not combine --gui with --interval or --runs")
@@ -434,6 +445,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine --gui with --list-profiles")
         if args.quiet:
             parser.error("do not combine --gui with --quiet")
+        if args.open_only:
+            parser.error("do not combine --gui with --open-only")
         from gui.app import run_app
 
         return run_app()
@@ -788,6 +801,7 @@ def _run_scan(
             args.output,
             args.format,
             run_index=export_index if export_index is not None else run_index,
+            open_only=args.open_only,
         )
     except ExportError as exc:
         return _cli_error(logger, exc), None
@@ -856,6 +870,7 @@ def _run_discovery(
             args.output,
             args.format,
             run_index=export_index if export_index is not None else run_index,
+            open_only=args.open_only,
         )
     except ExportError as exc:
         return _cli_error(logger, exc), None
@@ -958,7 +973,7 @@ def _run_history_query(args: argparse.Namespace, logger: logging.Logger) -> int:
         if args.history_id is not None:
             report = store.load(args.history_id)
             if args.json:
-                sys.stdout.write(report_to_json(report))
+                sys.stdout.write(report_to_json(report, open_only=args.open_only))
                 sys.stdout.flush()
                 return 0
             print(f"Stored scan #{args.history_id}")
@@ -971,7 +986,12 @@ def _run_history_query(args: argparse.Namespace, logger: logging.Logger) -> int:
                     show_refs=not args.no_refs,
                 )
             try:
-                saved = _maybe_export(report, args.output, args.format)
+                saved = _maybe_export(
+                    report,
+                    args.output,
+                    args.format,
+                    open_only=args.open_only,
+                )
             except ExportError as extra:
                 return _cli_error(logger, extra)
             if saved is not None:
@@ -1092,7 +1112,7 @@ def _print_scan_result(
     args: argparse.Namespace,
 ) -> None:
     if args.json:
-        sys.stdout.write(report_to_json(report))
+        sys.stdout.write(report_to_json(report, open_only=args.open_only))
         sys.stdout.flush()
         return
     if isinstance(report, DiscoveryReport):
@@ -1107,6 +1127,7 @@ def _maybe_export(
     fmt: str | None,
     *,
     run_index: int = 1,
+    open_only: bool = False,
 ) -> Path | None:
     if output is None and fmt is None:
         return None
@@ -1114,7 +1135,7 @@ def _maybe_export(
     format_name = _resolve_format(output, fmt)
     path = Path(output) if output else default_output_path(format_name)
     path = path_for_run(path, run_index)
-    return export_report(report, path, format_name)
+    return export_report(report, path, format_name, open_only=open_only)
 
 
 def _resolve_format(output: str | None, fmt: str | None) -> ExportFormat:

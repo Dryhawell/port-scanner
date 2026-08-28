@@ -128,6 +128,33 @@ def test_discovery_json_uses_tcp_ping() -> None:
     assert payload["summary"] == {"scanned": 2, "up": 1, "down": 1}
 
 
+def test_open_only_json_keeps_summary_filters_rows() -> None:
+    payload = report_to_dict(_sample_report(), open_only=True)
+    assert payload["open_only"] is True
+    assert payload["summary"] == {"scanned": 2, "open": 1, "closed": 1, "timeout": 0}
+    assert [row["port"] for row in payload["results"]] == [22]
+    discovery = discovery_to_dict(_sample_discovery(), open_only=True)
+    assert discovery["open_only"] is True
+    assert discovery["summary"] == {"scanned": 2, "up": 1, "down": 1}
+    assert [row["ip"] for row in discovery["results"]] == ["192.168.1.1"]
+
+
+def test_open_only_html_and_csv(tmp_path: Path) -> None:
+    html_path = tmp_path / "open.html"
+    export_report(_sample_report(), html_path, ExportFormat.HTML, open_only=True)
+    html_text = html_path.read_text(encoding="utf-8")
+    assert "OPEN" in html_text
+    assert 'class="CLOSED"' not in html_text
+    assert ">80<" not in html_text
+    assert "Open-only rows shown" in html_text
+    csv_path = tmp_path / "open.csv"
+    export_report(_sample_report(), csv_path, ExportFormat.CSV, open_only=True)
+    csv_text = csv_path.read_text(encoding="utf-8")
+    assert "22,OPEN" in csv_text.replace(" ", "")
+    assert "CLOSED" not in csv_text
+    assert "80,CLOSED" not in csv_text.replace(" ", "")
+
+
 def test_export_discovery_html(tmp_path: Path) -> None:
     output = tmp_path / "discovery.html"
     saved = export_report(_sample_discovery(), output, ExportFormat.HTML)

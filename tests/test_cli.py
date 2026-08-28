@@ -77,6 +77,10 @@ def test_parser_accepts_profile_or_ports() -> None:
     assert quiet.quiet is True
     quiet_short = parser.parse_args(["--target", "127.0.0.1", "--ports", "80", "-q"])
     assert quiet_short.quiet is True
+    open_only = parser.parse_args(
+        ["--target", "127.0.0.1", "--ports", "80", "--open-only"]
+    )
+    assert open_only.open_only is True
 
 
 def test_run_rejects_discover_combined_with_scan_flags() -> None:
@@ -750,3 +754,44 @@ def test_run_rejects_quiet_combos() -> None:
         run(["--target", "127.0.0.1", "--ports", "80", "--quiet", "--verbose"])
     with pytest.raises(SystemExit):
         run(["--gui", "--quiet"])
+
+
+def test_open_only_json_filters_results(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=22,
+                end_port=80,
+                timeout=0.5,
+                results=[
+                    PortScanResult(port=22, state=PortState.OPEN, service="ssh"),
+                    PortScanResult(port=80, state=PortState.CLOSED),
+                ],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(
+        ["--target", "127.0.0.1", "--ports", "22,80", "--json", "--open-only"]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["open_only"] is True
+    assert payload["summary"]["closed"] == 1
+    assert [row["port"] for row in payload["results"]] == [22]
+
+
+def test_run_rejects_open_only_combos() -> None:
+    with pytest.raises(SystemExit):
+        run(["--target", "127.0.0.1", "--ports", "80", "--open-only", "--show-closed"])
+    with pytest.raises(SystemExit):
+        run(["--gui", "--open-only"])

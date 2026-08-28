@@ -40,10 +40,11 @@ class ExportError(ValueError):
     """Raised when a report cannot be written."""
 
 
-def report_to_dict(report: ScanReport) -> dict[str, object]:
+def report_to_dict(report: ScanReport, *, open_only: bool = False) -> dict[str, object]:
     """Serialize a scan into a stable JSON-friendly dictionary."""
     open_ports = [item.port for item in report.open_results]
     scanned_ports = [item.port for item in report.results]
+    rows = report.open_results if open_only else report.results
     payload: dict[str, object] = {
         "tool": APP_NAME,
         "version": APP_VERSION,
@@ -67,28 +68,39 @@ def report_to_dict(report: ScanReport) -> dict[str, object]:
             "closed": report.count(PortState.CLOSED),
             "timeout": report.count(PortState.TIMEOUT),
         },
-        "results": [_result_to_dict(item) for item in report.results],
+        "results": [_result_to_dict(item) for item in rows],
     }
+    if open_only:
+        payload["open_only"] = True
     contiguous = scanned_ports == list(range(report.start_port, report.end_port + 1))
     if scanned_ports and not contiguous:
         payload["ports"] = scanned_ports
     return payload
 
 
-def report_to_json(report: ScanReport | DiscoveryReport) -> str:
+def report_to_json(
+    report: ScanReport | DiscoveryReport,
+    *,
+    open_only: bool = False,
+) -> str:
     """Return the same JSON text that export writes to a .json file."""
     payload = (
-        discovery_to_dict(report)
+        discovery_to_dict(report, open_only=open_only)
         if isinstance(report, DiscoveryReport)
-        else report_to_dict(report)
+        else report_to_dict(report, open_only=open_only)
     )
     return json.dumps(payload, indent=JSON_INDENT, ensure_ascii=True) + "\n"
 
 
-def discovery_to_dict(report: DiscoveryReport) -> dict[str, object]:
+def discovery_to_dict(
+    report: DiscoveryReport,
+    *,
+    open_only: bool = False,
+) -> dict[str, object]:
     """Serialize a TCP ping discovery into a JSON-friendly dictionary."""
     live = [item.ip for item in report.up_results]
-    return {
+    rows = report.up_results if open_only else report.results
+    payload: dict[str, object] = {
         "tool": APP_NAME,
         "version": APP_VERSION,
         "scan_method": "tcp_ping",
@@ -104,14 +116,19 @@ def discovery_to_dict(report: DiscoveryReport) -> dict[str, object]:
             "up": report.count(HostState.UP),
             "down": report.count(HostState.DOWN),
         },
-        "results": [_host_to_dict(item) for item in report.results],
+        "results": [_host_to_dict(item) for item in rows],
     }
+    if open_only:
+        payload["open_only"] = True
+    return payload
 
 
 def export_report(
     report: ScanReport | DiscoveryReport,
     path: str | Path,
     fmt: ExportFormat | str,
+    *,
+    open_only: bool = False,
 ) -> Path:
     """Write the report and return the resolved file path."""
     format_name = _parse_format(fmt)
@@ -131,7 +148,7 @@ def export_report(
             ExportFormat.HTML: _write_html,
             ExportFormat.PDF: _write_pdf,
         }
-    writers[format_name](report, output)
+    writers[format_name](report, output, open_only=open_only)
     logger.info("Report saved: %s", output)
     return output
 
@@ -163,15 +180,15 @@ def infer_format(path: str | Path) -> ExportFormat | None:
     return None
 
 
-def _write_json(report: ScanReport, path: Path) -> None:
+def _write_json(report: ScanReport, path: Path, *, open_only: bool = False) -> None:
     try:
-        path.write_text(report_to_json(report), encoding="utf-8")
+        path.write_text(report_to_json(report, open_only=open_only), encoding="utf-8")
     except OSError as exc:
         logger.error("Could not write JSON report: %s", exc)
         raise ExportError(f"Could not write JSON report: {exc}") from exc
 
 
-def _write_csv(report: ScanReport, path: Path) -> None:
+def _write_csv(report: ScanReport, path: Path, *, open_only: bool = False) -> None:
     fieldnames = (
         "port",
         "state",
@@ -183,32 +200,44 @@ def _write_csv(report: ScanReport, path: Path) -> None:
         "banner",
         "refs",
     )
+    rows = report.open_results if open_only else report.results
     try:
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
-            for item in report.results:
+            for item in rows:
                 writer.writerow(_result_to_csv_row(item))
     except OSError as exc:
         logger.error("Could not write CSV report: %s", exc)
         raise ExportError(f"Could not write CSV report: {exc}") from exc
 
 
-def _write_discovery_json(report: DiscoveryReport, path: Path) -> None:
+def _write_discovery_json(
+    report: DiscoveryReport,
+    path: Path,
+    *,
+    open_only: bool = False,
+) -> None:
     try:
-        path.write_text(report_to_json(report), encoding="utf-8")
+        path.write_text(report_to_json(report, open_only=open_only), encoding="utf-8")
     except OSError as exc:
         logger.error("Could not write JSON report: %s", exc)
         raise ExportError(f"Could not write JSON report: {exc}") from exc
 
 
-def _write_discovery_csv(report: DiscoveryReport, path: Path) -> None:
+def _write_discovery_csv(
+    report: DiscoveryReport,
+    path: Path,
+    *,
+    open_only: bool = False,
+) -> None:
     fieldnames = ("ip", "state", "evidence", "response_time")
+    rows = report.up_results if open_only else report.results
     try:
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
-            for item in report.results:
+            for item in rows:
                 response = _round_time(item.response_time)
                 writer.writerow(
                     {
@@ -223,22 +252,29 @@ def _write_discovery_csv(report: DiscoveryReport, path: Path) -> None:
         raise ExportError(f"Could not write CSV report: {exc}") from exc
 
 
-def _write_discovery_html(report: DiscoveryReport, path: Path) -> None:
+def _write_discovery_html(
+    report: DiscoveryReport,
+    path: Path,
+    *,
+    open_only: bool = False,
+) -> None:
     try:
-        path.write_text(_discovery_to_html(report), encoding="utf-8")
+        path.write_text(_discovery_to_html(report, open_only=open_only), encoding="utf-8")
     except OSError as exc:
         logger.error("Could not write HTML report: %s", exc)
         raise ExportError(f"Could not write HTML report: {exc}") from exc
 
 
-def _discovery_to_html(report: DiscoveryReport) -> str:
+def _discovery_to_html(report: DiscoveryReport, *, open_only: bool = False) -> str:
     up_count = report.count(HostState.UP)
     down_count = report.count(HostState.DOWN)
     duration = "—" if report.duration is None else f"{report.duration:.2f}s"
     scan_time = _isoformat(report.started_at) or "—"
-    rows = "\n".join(_html_host_row(item) for item in report.results)
+    table_rows = report.up_results if open_only else report.results
+    rows = "\n".join(_html_host_row(item) for item in table_rows)
     if not rows:
         rows = '<tr><td colspan="4" class="empty">No hosts in this report.</td></tr>'
+    filter_note = " Open-only rows shown." if open_only else ""
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en">\n'
@@ -251,7 +287,8 @@ def _discovery_to_html(report: DiscoveryReport) -> str:
         "<body>\n"
         "<main>\n"
         f"<p class=\"notice\">{html.escape(APP_NAME)} {html.escape(APP_VERSION)}"
-        " — authorized TCP ping discovery only. Not a vulnerability assessment.</p>\n"
+        " — authorized TCP ping discovery only. Not a vulnerability assessment."
+        f"{html.escape(filter_note)}</p>\n"
         "<h1>Host discovery</h1>\n"
         "<section class=\"meta\">\n"
         f"<div><span>Target</span><strong>{html.escape(report.spec)}</strong></div>\n"
@@ -292,18 +329,20 @@ def _html_host_row(result: HostDiscoveryResult) -> str:
     )
 
 
-def report_to_html(report: ScanReport) -> str:
+def report_to_html(report: ScanReport, *, open_only: bool = False) -> str:
     """Build a standalone HTML document for a scan report."""
     open_count = report.count(PortState.OPEN)
     closed_count = report.count(PortState.CLOSED)
     timeout_count = report.count(PortState.TIMEOUT)
     duration = "—" if report.duration is None else f"{report.duration:.2f}s"
     scan_time = _isoformat(report.started_at) or "—"
-    rows = "\n".join(_html_result_row(item) for item in report.results)
+    table_rows = report.open_results if open_only else report.results
+    rows = "\n".join(_html_result_row(item) for item in table_rows)
     if not rows:
         rows = (
             '<tr><td colspan="8" class="empty">No ports in this report.</td></tr>'
         )
+    filter_note = " Open-only rows shown." if open_only else ""
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en">\n'
@@ -317,7 +356,7 @@ def report_to_html(report: ScanReport) -> str:
         "<main>\n"
         f"<p class=\"notice\">{html.escape(APP_NAME)} {html.escape(APP_VERSION)}"
         " — authorized TCP connect scan only. Not a vulnerability assessment. "
-        f"{html.escape(DISCLAIMER)}</p>\n"
+        f"{html.escape(DISCLAIMER)}{html.escape(filter_note)}</p>\n"
         "<h1>Scan report</h1>\n"
         "<section class=\"meta\">\n"
         f"<div><span>Target</span><strong>{html.escape(report.target)}</strong></div>\n"
@@ -351,18 +390,19 @@ def report_to_html(report: ScanReport) -> str:
     )
 
 
-def _write_html(report: ScanReport, path: Path) -> None:
+def _write_html(report: ScanReport, path: Path, *, open_only: bool = False) -> None:
     try:
-        path.write_text(report_to_html(report), encoding="utf-8")
+        path.write_text(report_to_html(report, open_only=open_only), encoding="utf-8")
     except OSError as exc:
         logger.error("Could not write HTML report: %s", exc)
         raise ExportError(f"Could not write HTML report: {exc}") from exc
 
 
-def report_to_pdf(report: ScanReport) -> bytes:
+def report_to_pdf(report: ScanReport, *, open_only: bool = False) -> bytes:
     """Build a simple PDF for a port-scan report."""
     duration = "-" if report.duration is None else f"{report.duration:.2f}s"
     method = "udp_probe" if report.protocol == "udp" else "tcp_connect"
+    table_rows = report.open_results if open_only else report.results
     meta = [
         f"Tool: {APP_NAME} {APP_VERSION}",
         f"Target: {report.target}  ({report.resolved_ip})  IPv{report.ip_version}",
@@ -377,9 +417,11 @@ def report_to_pdf(report: ScanReport) -> bytes:
             f"Timeout: {report.count(PortState.TIMEOUT)}"
         ),
     ]
+    if open_only:
+        meta.append("Rows: OPEN ports only")
     header = f"{'Port':<6}{'State':<10}{'Proto':<7}{'Service':<12}{'Product':<18}{'Time':<10}Banner"
     rows = [header, "-" * 96]
-    for item in report.results:
+    for item in table_rows:
         rows.append(
             f"{item.port:<6}"
             f"{item.state.value:<10}"
@@ -389,7 +431,7 @@ def report_to_pdf(report: ScanReport) -> bytes:
             f"{(item.latency_label() or '-'):<10}"
             f"{item.banner or ''}"
         )
-    if not report.results:
+    if not table_rows:
         rows.append("(no ports in this report)")
     return build_pdf(
         "Scan report",
@@ -399,9 +441,10 @@ def report_to_pdf(report: ScanReport) -> bytes:
     )
 
 
-def discovery_to_pdf(report: DiscoveryReport) -> bytes:
+def discovery_to_pdf(report: DiscoveryReport, *, open_only: bool = False) -> bytes:
     """Build a simple PDF for a TCP ping discovery report."""
     duration = "-" if report.duration is None else f"{report.duration:.2f}s"
+    table_rows = report.up_results if open_only else report.results
     meta = [
         f"Tool: {APP_NAME} {APP_VERSION}",
         f"Target: {report.spec}    IPv{report.ip_version}    Method: tcp_ping",
@@ -413,16 +456,18 @@ def discovery_to_pdf(report: DiscoveryReport) -> bytes:
             f"Down: {report.count(HostState.DOWN)}"
         ),
     ]
+    if open_only:
+        meta.append("Rows: UP hosts only")
     header = f"{'Host':<42}{'State':<8}{'Evidence':<22}Time"
     rows = [header, "-" * 96]
-    for item in report.results:
+    for item in table_rows:
         rows.append(
             f"{item.ip:<42}"
             f"{item.state.value:<8}"
             f"{(item.evidence or '-'):<22.22}"
             f"{item.latency_label() or '-'}"
         )
-    if not report.results:
+    if not table_rows:
         rows.append("(no hosts in this report)")
     return build_pdf(
         "Host discovery",
@@ -432,17 +477,22 @@ def discovery_to_pdf(report: DiscoveryReport) -> bytes:
     )
 
 
-def _write_pdf(report: ScanReport, path: Path) -> None:
+def _write_pdf(report: ScanReport, path: Path, *, open_only: bool = False) -> None:
     try:
-        path.write_bytes(report_to_pdf(report))
+        path.write_bytes(report_to_pdf(report, open_only=open_only))
     except OSError as extra:
         logger.error("Could not write PDF report: %s", extra)
         raise ExportError(f"Could not write PDF report: {extra}") from extra
 
 
-def _write_discovery_pdf(report: DiscoveryReport, path: Path) -> None:
+def _write_discovery_pdf(
+    report: DiscoveryReport,
+    path: Path,
+    *,
+    open_only: bool = False,
+) -> None:
     try:
-        path.write_bytes(discovery_to_pdf(report))
+        path.write_bytes(discovery_to_pdf(report, open_only=open_only))
     except OSError as extra:
         logger.error("Could not write PDF report: %s", extra)
         raise ExportError(f"Could not write PDF report: {extra}") from extra

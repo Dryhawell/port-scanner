@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.27.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--timeout` is the per-port wait (`0.05`–`60` seconds; default `0.5`). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.28.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--open-only` keeps JSON/CSV/HTML/PDF rows to OPEN ports (or UP hosts) while summary counts stay full. `--timeout` is the per-port wait (`0.05`–`60` seconds; default `0.5`). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -30,6 +30,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - CLI (`argparse`) with a live progress bar (skip with `--quiet` / `-q`), plus a dark-themed Tkinter GUI
 - Scheduled repeats in this process (`--interval` 5–86400s, `--runs` or Ctrl+C), with a diff of newly open / gone ports
 - JSON, CSV, HTML, and simple PDF reports under `reports/`
+- `--open-only` filters export/`--json` result rows to OPEN ports or UP hosts (summary stays full; history DB still stores everything)
 - `--json` prints a scan report, a stored run, a history list, a history diff, or named profiles to stdout (no file; human table skipped) so you can pipe to `jq`
 - `--exit-open` exits `2` when the completed scan found OPEN ports (or UP hosts); errors stay `1`
 - Local sqlite scan history (`reports/history.db`) with list / show / diff
@@ -105,7 +106,8 @@ Everyday commands stay in [Quick start](#quick-start). The table lists every fla
 | `--ipv6` | Resolve hostnames to IPv6 (AAAA). Literals keep their own family |
 | `--udp` | UDP probe instead of TCP connect; with `--list-profiles`, print UDP sets only |
 | `--discover` / `-d` | TCP ping instead of a port scan (do not combine with `--udp`, `--ports`, `--profile`, `--exclude`, or `--no-banner`) |
-| `--show-closed` | Print CLOSED and TIMEOUT, or DOWN hosts during discovery |
+| `--show-closed` | Print CLOSED and TIMEOUT, or DOWN hosts during discovery. Do not combine with `--open-only` |
+| `--open-only` | In `--json` and file exports (JSON/CSV/HTML/PDF), include only OPEN ports or UP hosts. Summary counts stay full. Do not combine with `--show-closed` or `--gui` |
 | `--output` / `-o` | Report file path |
 | `--format` / `-f` | `json`, `csv`, `html`, or `pdf` (writes a file; default json when `--output` is set) |
 | `--json` | Print JSON to stdout (scan report, `--history` list, `--history-id` run, `--history-diff`, or `--list-profiles`). No file. Do not combine with `--output`, `--format`, `--gui`, `--target-file`, or `--interval` / `--runs` |
@@ -171,8 +173,11 @@ python main.py --target 127.0.0.1 --ports 1-1023 --exclude 80,443
 
 # JSON, scripting helpers, catalogs
 python main.py --target 127.0.0.1 --ports 80 --json
+python main.py --target 127.0.0.1 --ports 1-100 --json --open-only
+python main.py --target 127.0.0.1 --profile quick --format csv --open-only
 python main.py --history --json
 python main.py --history-id 3 --json
+python main.py --history-id 3 --json --open-only
 python main.py --history-diff 3 4 --json
 python main.py --target 127.0.0.1 --ports 80 --json --exit-open
 python main.py --target 127.0.0.1 --profile quick --no-banner
@@ -189,6 +194,7 @@ python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```powershell
 python main.py --target 127.0.0.1 --ports 80 --json | jq .open_ports
 python main.py --target 127.0.0.1 --ports 80 --json --quiet | jq .open_ports
+python main.py --target 127.0.0.1 --ports 1-100 --json --open-only | jq .results
 python main.py --history --json | jq .scans
 python main.py --history-id 3 --json | jq .open_ports
 python main.py --list-profiles --json | jq .tcp.quick
@@ -492,6 +498,7 @@ GitHub Actions runs `python -m ruff check .` on Ubuntu and `python -m pytest` on
 - `--json` is one JSON document on stdout. A live scan and `--history-id` share the report schema; `--history` and `--history-diff` use smaller list/diff objects; `--list-profiles --json` dumps the named TCP/UDP sets. It is not a file export, not JSONL, and not combined with `--target-file` or `--interval`
 - `--list-profiles` is a catalog of named port sets for `--profile`, not a scan and not a vulnerability list. It does not open sockets
 - `--quiet` hides progress and status lines only; it does not change scan behavior, hide OPEN results, or replace `--json`
+- `--open-only` filters exported/`--json` result rows; it does not change the scan, sqlite history, or summary counts. Human CLI already hides CLOSED/TIMEOUT unless `--show-closed`
 - `--timeout` is per port (and per discovery probe), not a wall-clock limit for the whole run; values outside `0.05`–`60` are rejected
 - `--exit-open` is a script helper, not an alert: CLOSED and TIMEOUT do not trigger exit `2`. Default scans still exit `0` when they finish
 - GitHub Actions runs ruff plus mocked unit tests on Ubuntu and Windows; it does not scan hosts and is not a security audit of pull requests
