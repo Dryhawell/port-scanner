@@ -57,6 +57,10 @@ def test_parser_accepts_profile_or_ports() -> None:
         ["--target", "127.0.0.1", "--ports", "80", "--json"]
     )
     assert stdout_json.json is True
+    exit_open = parser.parse_args(
+        ["--target", "127.0.0.1", "--ports", "80", "--exit-open"]
+    )
+    assert exit_open.exit_open is True
 
 
 def test_run_rejects_discover_combined_with_scan_flags() -> None:
@@ -504,3 +508,60 @@ def test_json_prints_report_on_stdout(
     assert payload["scan_method"] == "tcp_connect"
     assert "[+]" not in captured.out
     assert "authorized" in captured.err.lower()
+
+
+def test_run_rejects_exit_open_combos() -> None:
+    with pytest.raises(SystemExit):
+        run(["--gui", "--exit-open"])
+    with pytest.raises(SystemExit):
+        run(["--history", "--exit-open"])
+
+
+def test_exit_open_returns_two_when_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=80,
+                end_port=80,
+                timeout=0.5,
+                results=[PortScanResult(port=80, state=PortState.OPEN)],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "80"]) == 0
+    assert run(["--target", "127.0.0.1", "--ports", "80", "--exit-open"]) == 2
+    assert run(["--target", "127.0.0.1", "--ports", "80", "--json", "--exit-open"]) == 2
+
+
+def test_exit_open_returns_zero_when_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=80,
+                end_port=80,
+                timeout=0.5,
+                results=[PortScanResult(port=80, state=PortState.CLOSED)],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "80", "--exit-open"]) == 0

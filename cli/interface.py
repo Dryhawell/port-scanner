@@ -19,6 +19,7 @@ from scanner.constants import (
     DEFAULT_HISTORY_LIMIT,
     DEFAULT_MAX_WORKERS,
     DEFAULT_TIMEOUT,
+    EXIT_OPEN,
     MAX_HISTORY_LIMIT,
     MAX_INTERVAL,
     MAX_RUNS,
@@ -104,6 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target 127.0.0.1 --ports 80 --json\n"
             "  python main.py --history --json\n"
             "  python main.py --history-id 3 --json\n"
+            "  python main.py --target 127.0.0.1 --ports 80 --json --exit-open\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -194,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Print JSON to stdout (a scan report, a stored run, a history list, or a diff)",
+    )
+    parser.add_argument(
+        "--exit-open",
+        action="store_true",
+        help="Exit 2 if any OPEN port (or UP host) is found; 0 if none. Errors stay 1",
     )
     parser.add_argument(
         "--verbose",
@@ -387,6 +394,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine --gui with --target-file")
         if args.json:
             parser.error("do not combine --gui with --json")
+        if args.exit_open:
+            parser.error("do not combine --gui with --exit-open")
         from gui.app import run_app
 
         return run_app()
@@ -403,6 +412,8 @@ def run(argv: list[str] | None = None) -> int:
             parser.error("do not combine history query with --target-file")
         if args.json and (args.output or args.format):
             parser.error("use --json for stdout, or --output/--format for a file, not both")
+        if args.exit_open:
+            parser.error("do not combine history query with --exit-open")
         query_flags = sum(
             [
                 bool(args.history),
@@ -473,6 +484,7 @@ def _run_target_file(args: argparse.Namespace, logger: logging.Logger) -> int:
     sys.stdout.flush()
 
     failures = 0
+    saw_open = False
     for index, target in enumerate(targets, start=1):
         print(f"--- Target {index}/{len(targets)}: {target} ---")
         sys.stdout.flush()
@@ -496,11 +508,15 @@ def _run_target_file(args: argparse.Namespace, logger: logging.Logger) -> int:
             )
         if code == 130:
             return 130
-        if code != 0:
+        if code == EXIT_OPEN:
+            saw_open = True
+        elif code != 0:
             failures += 1
 
     print(f"Done. {len(targets) - failures}/{len(targets)} target(s) succeeded.")
-    return 1 if failures else 0
+    if failures:
+        return 1
+    return EXIT_OPEN if saw_open else 0
 
 
 def _run_scheduled(
@@ -533,13 +549,13 @@ def _run_scheduled(
             code, report = _run_discovery(args, logger, run_index=run_index, announce=False)
         else:
             code, report = _run_scan(args, logger, run_index=run_index, announce=False)
-        if code != 0 or report is None:
+        if report is None or (code not in {0, EXIT_OPEN}):
             return code
         if previous is not None:
             _print_delta(previous, report)
         previous = report
         if runs is not None and run_index >= runs:
-            return 0
+            return code
         print(
             f"Waiting {interval:g}s until next run (Ctrl+C to stop).",
             file=sys.stderr,
@@ -659,7 +675,7 @@ def _run_scan(
     if not args.json:
         _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
     _maybe_record(report, args.no_history, quiet=args.json)
-    return 0, report
+    return _scan_exit_code(args, report), report
 
 
 def _run_discovery(
@@ -726,7 +742,7 @@ def _run_discovery(
     if not args.json:
         _maybe_baseline_diff(report, args.no_diff, run_index=run_index)
     _maybe_record(report, args.no_history, quiet=args.json)
-    return 0, report
+    return _scan_exit_code(args, report), report
 
 
 def _print_discovery_progress(completed: int, total: int, live_count: int) -> None:
@@ -934,6 +950,18 @@ def _print_stored_diff(
         print(f"  [+] {port} newly open")
     for port in disappeared:
         print(f"  [-] {port} no longer open")
+
+
+def _scan_exit_code(
+    args: argparse.Namespace,
+    report: ScanReport | DiscoveryReport,
+) -> int:
+    """Return 2 when --exit-open and the report has OPEN ports or UP hosts."""
+    if not args.exit_open:
+        return 0
+    if isinstance(report, DiscoveryReport):
+        return EXIT_OPEN if report.count(HostState.UP) else 0
+    return EXIT_OPEN if report.count(PortState.OPEN) else 0
 
 
 def _print_scan_result(

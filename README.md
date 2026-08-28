@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.21.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.22.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -30,6 +30,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Scheduled repeats in this process (`--interval` 5–86400s, `--runs` or Ctrl+C), with a diff of newly open / gone ports
 - JSON, CSV, HTML, and simple PDF reports under `reports/`
 - `--json` prints a scan report, a stored run, a history list, or a history diff to stdout (no file; human table skipped) so you can pipe to `jq`
+- `--exit-open` exits `2` when the completed scan found OPEN ports (or UP hosts); errors stay `1`
 - Local sqlite scan history (`reports/history.db`) with list / show / diff
 - Automatic baseline diff vs the last stored scan of the same target (`--no-diff` to skip)
 - Result-count charts: ASCII on the CLI, SVG in HTML reports, Tkinter canvas in the GUI
@@ -91,6 +92,7 @@ python main.py --target 127.0.0.1 --profile quick --exclude 80,443
 python main.py --target 127.0.0.1 --ports 80 --json
 python main.py --history --json
 python main.py --history-id 3 --json
+python main.py --target 127.0.0.1 --ports 80 --json --exit-open
 ```
 
 | Flag | Meaning |
@@ -109,6 +111,7 @@ python main.py --history-id 3 --json
 | `--output` / `-o` | Report file path |
 | `--format` / `-f` | `json`, `csv`, `html`, or `pdf` (writes a file; default json when `--output` is set) |
 | `--json` | Print JSON to stdout (scan report, `--history` list, `--history-id` run, or `--history-diff`). No file. Do not combine with `--output`, `--format`, `--gui`, `--target-file`, or `--interval` / `--runs` |
+| `--exit-open` | Exit `2` if any OPEN port (or UP host) is found; `0` if none. Validation/runtime errors stay `1`. Do not combine with `--gui` or history query flags |
 | `--verbose` / `-v` | DEBUG lines on the console |
 | `--interval` | Seconds to wait between authorized repeats (`5`–`86400`). Process stays in the foreground |
 | `--runs` | How many repeats when `--interval` is set (`1`–`1000`). Omit to loop until Ctrl+C |
@@ -157,6 +160,7 @@ python main.py --target 127.0.0.1 --ports 80 --json
 python main.py --history --json
 python main.py --history-id 3 --json
 python main.py --history-diff 3 4 --json
+python main.py --target 127.0.0.1 --ports 80 --json --exit-open
 python main.py -t 127.0.0.1 -p 1-80 --show-closed --verbose
 ```
 
@@ -167,6 +171,8 @@ python main.py --target 127.0.0.1 --ports 80 --json | jq .open_ports
 python main.py --history --json | jq .scans
 python main.py --history-id 3 --json | jq .open_ports
 ```
+
+Without `--exit-open`, a finished scan is always exit `0` even if ports are OPEN. With the flag: `0` = completed and nothing open/up, `2` = completed and at least one OPEN port or UP host, `1` = error, `130` = interrupted. A `--target-file` run still prefers `1` if any host failed. Scheduled `--interval` uses the **last** completed run.
 
 Example `hosts.txt` (UTF-8, `#` comments, blanks ignored; duplicates keep the first line):
 
@@ -461,6 +467,7 @@ GitHub Actions runs `python -m ruff check .` on Ubuntu and `python -m pytest` on
 - Charts scale to the largest count in that picture; they are not a risk score or a network map
 - Reference notes are a small local table, not a CVE feed, not version-wide matching, and not a confirmation
 - `--json` is one JSON document on stdout. A live scan and `--history-id` share the report schema; `--history` and `--history-diff` use smaller list/diff objects. It is not a file export, not JSONL, and not combined with `--target-file` or `--interval`
+- `--exit-open` is a script helper, not an alert: CLOSED and TIMEOUT do not trigger exit `2`. Default scans still exit `0` when they finish
 - GitHub Actions runs ruff plus mocked unit tests on Ubuntu and Windows; it does not scan hosts and is not a security audit of pull requests
 - Ruff does not enforce `ruff format` or import sorting; long help strings are allowed (`E501` ignored)
 
