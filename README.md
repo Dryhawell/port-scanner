@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.25.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.26.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--timeout` is the per-port wait (`0.05`–`60` seconds; default `0.5`). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -70,6 +70,19 @@ python -m pip install -r requirements.txt
 
 `requirements.txt` currently pins pytest. `requirements-dev.txt` adds ruff. Tkinter ships with most CPython Windows/macOS builds.
 
+## Quick start
+
+Use only on `localhost`, devices you own, or lab hosts you are allowed to test.
+
+```powershell
+python main.py --target 127.0.0.1 --profile quick
+python main.py --gui
+python main.py --list-profiles
+python main.py --target 127.0.0.1 --ports 22,80,443 --timeout 1
+```
+
+`--timeout` is the **per-port** connect/UDP wait (default `0.5` seconds, allowed `0.05`–`60`). Raise it on slow lab links to cut false TIMEOUT; lower it for faster local checks. Full flag list below.
+
 ## Usage
 
 ```powershell
@@ -100,6 +113,7 @@ python main.py --list-profiles --udp
 python main.py --list-profiles --json
 python main.py --target 127.0.0.1 --ports 80 --quiet
 python main.py --target 127.0.0.1 --ports 80 --json --quiet
+python main.py --target 127.0.0.1 --ports 22,80 --timeout 1
 ```
 
 | Flag | Meaning |
@@ -110,7 +124,7 @@ python main.py --target 127.0.0.1 --ports 80 --json --quiet
 | `--profile` | Named port set: `quick` or `common` (instead of `--ports`) |
 | `--list-profiles` | Print named TCP/UDP port sets and exit (no scan). `--udp` prints UDP only. Do not combine with `--gui`, `--target`, history flags, `--ports` / `--profile`, `--discover`, `--interval` / `--runs`, `--exit-open`, or `--no-banner` |
 | `--exclude` / `-x` | Ports to skip, same syntax as `--ports`. Do not combine with `--discover`. Empty remainder is an error |
-| `--timeout` | Connect timeout in seconds (default `0.5`) |
+| `--timeout` | Per-port connect/UDP wait in seconds (`0.05`–`60`; default `0.5`). Higher reduces false TIMEOUT on slow hosts; lower speeds local scans. Not the same as `--interval` |
 | `--threads` | Max workers, `1-200` (default `50`) |
 | `--ipv6` | Resolve hostnames to IPv6 (AAAA). Literals keep their own family |
 | `--udp` | UDP probe instead of TCP connect; with `--list-profiles`, print UDP sets only |
@@ -144,7 +158,7 @@ python main.py --target 127.0.0.1 --profile quick
 python main.py --target ::1 --profile quick
 python main.py --target localhost --ipv6 --ports 22,80,443
 python main.py --target 127.0.0.1 --profile common --show-closed
-python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5
+python main.py --target localhost --ports 20-100 --threads 50 --timeout 1
 python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json
 python main.py --target 127.0.0.1 --ports 22 --format csv
 python main.py --target 127.0.0.1 --profile quick --format html
@@ -447,7 +461,7 @@ A note means the service is worth reading about. It does not mean the host is co
 
 Port scanning is I/O-bound: workers wait on the network, they do not burn CPU. `ThreadPoolExecutor` overlaps those waits. Too many threads can slow this machine, load the target, and increase timeouts. The cap is 200.
 
-Worker count is `min(requested, port_count)`.
+Worker count is `min(requested, port_count)`. `--timeout` bounds each wait (`0.05`–`60` s); it is not a whole-scan deadline.
 
 ## Testing
 
@@ -488,6 +502,7 @@ GitHub Actions runs `python -m ruff check .` on Ubuntu and `python -m pytest` on
 - `--json` is one JSON document on stdout. A live scan and `--history-id` share the report schema; `--history` and `--history-diff` use smaller list/diff objects; `--list-profiles --json` dumps the named TCP/UDP sets. It is not a file export, not JSONL, and not combined with `--target-file` or `--interval`
 - `--list-profiles` is a catalog of named port sets for `--profile`, not a scan and not a vulnerability list. It does not open sockets
 - `--quiet` hides progress and status lines only; it does not change scan behavior, hide OPEN results, or replace `--json`
+- `--timeout` is per port (and per discovery probe), not a wall-clock limit for the whole run; values outside `0.05`–`60` are rejected
 - `--exit-open` is a script helper, not an alert: CLOSED and TIMEOUT do not trigger exit `2`. Default scans still exit `0` when they finish
 - GitHub Actions runs ruff plus mocked unit tests on Ubuntu and Windows; it does not scan hosts and is not a security audit of pull requests
 - Ruff does not enforce `ruff format` or import sorting; long help strings are allowed (`E501` ignored)

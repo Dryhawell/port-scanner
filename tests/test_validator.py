@@ -176,10 +176,16 @@ def test_parse_discovery_targets_rejects_large_and_ipv6_nets() -> None:
 def test_timeout_and_threads() -> None:
     assert validate_timeout("0.5") == 0.5
     assert validate_timeout(1) == 1.0
+    assert validate_timeout("0.05") == 0.05
+    assert validate_timeout(60) == 60.0
     with pytest.raises(ValidationError, match="positive number"):
         validate_timeout(0)
     with pytest.raises(ValidationError, match="positive number"):
         validate_timeout(True)
+    with pytest.raises(ValidationError, match="between 0.05 and 60"):
+        validate_timeout(0.01)
+    with pytest.raises(ValidationError, match="between 0.05 and 60"):
+        validate_timeout(61)
     assert validate_threads("50") == 50
     with pytest.raises(ValidationError, match="between 1 and"):
         validate_threads(0)

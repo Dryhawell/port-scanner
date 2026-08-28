@@ -18,10 +18,12 @@ from scanner.constants import (
     MAX_PORT,
     MAX_RUNS,
     MAX_TARGET_FILE_HOSTS,
+    MAX_TIMEOUT,
     MAX_WORKERS,
     MIN_DISCOVERY_PREFIX,
     MIN_INTERVAL,
     MIN_PORT,
+    MIN_TIMEOUT,
     PROTOCOL_TCP,
     PROTOCOL_UDP,
     SCAN_PROFILES,
@@ -260,25 +262,34 @@ def validate_protocol(value: str) -> str:
     return cleaned
 
 
-def validate_timeout(timeout: float | int | str) -> float:
-    """Return a positive timeout in seconds."""
-    if isinstance(timeout, bool) or timeout is None:
-        raise ValidationError("Timeout must be a positive number.")
+def _positive_seconds(value: float | int | str, *, label: str = "Timeout") -> float:
+    """Parse a finite positive duration in seconds (no min/max policy)."""
+    if isinstance(value, bool) or value is None:
+        raise ValidationError(f"{label} must be a positive number.")
 
-    if isinstance(timeout, str):
-        cleaned = timeout.strip()
+    if isinstance(value, str):
+        cleaned = value.strip()
         try:
-            value = float(cleaned)
+            parsed = float(cleaned)
         except ValueError as exc:
-            raise ValidationError("Timeout must be a positive number.") from exc
-    elif isinstance(timeout, (int, float)):
-        value = float(timeout)
+            raise ValidationError(f"{label} must be a positive number.") from exc
+    elif isinstance(value, (int, float)):
+        parsed = float(value)
     else:
-        raise ValidationError("Timeout must be a positive number.")
+        raise ValidationError(f"{label} must be a positive number.")
 
-    if value != value or value in (float("inf"), float("-inf")) or value <= 0:
-        raise ValidationError("Timeout must be a positive number.")
+    if parsed != parsed or parsed in (float("inf"), float("-inf")) or parsed <= 0:
+        raise ValidationError(f"{label} must be a positive number.")
+    return parsed
 
+
+def validate_timeout(timeout: float | int | str) -> float:
+    """Return a per-port connect/UDP wait in seconds (MIN_TIMEOUT–MAX_TIMEOUT)."""
+    value = _positive_seconds(timeout, label="Timeout")
+    if value < MIN_TIMEOUT or value > MAX_TIMEOUT:
+        raise ValidationError(
+            f"Timeout must be between {MIN_TIMEOUT:g} and {MAX_TIMEOUT:g} seconds."
+        )
     return value
 
 
@@ -304,7 +315,7 @@ def validate_threads(workers: int | str) -> int:
 
 def validate_interval(value: float | int | str) -> float:
     """Return a wait between scheduled runs, in seconds."""
-    seconds = validate_timeout(value)
+    seconds = _positive_seconds(value, label="Interval")
     if seconds < MIN_INTERVAL or seconds > MAX_INTERVAL:
         raise ValidationError(
             f"Interval must be between {MIN_INTERVAL} and {MAX_INTERVAL} seconds."

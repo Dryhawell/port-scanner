@@ -7,11 +7,14 @@ Port ranges below are conventional IANA groupings, not proof of a service:
 """
 
 APP_NAME = "port-scanner"
-APP_VERSION = "1.25.0"
+APP_VERSION = "1.26.0"
 
 MIN_PORT = 1
 MAX_PORT = 65535
 DEFAULT_TIMEOUT = 0.5
+# Per-port connect / UDP wait bounds (seconds). Interval uses its own range.
+MIN_TIMEOUT = 0.05
+MAX_TIMEOUT = 60.0
 DEFAULT_MAX_WORKERS = 50
 MAX_WORKERS = 200
 MIN_INTERVAL = 5

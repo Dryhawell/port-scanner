@@ -24,8 +24,10 @@ from scanner.constants import (
     MAX_INTERVAL,
     MAX_RUNS,
     MAX_TARGET_FILE_HOSTS,
+    MAX_TIMEOUT,
     MAX_WORKERS,
     MIN_INTERVAL,
+    MIN_TIMEOUT,
     PROGRESS_BAR_WIDTH,
     PROTOCOL_TCP,
     PROTOCOL_UDP,
@@ -89,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target localhost --ipv6 --ports 22,80,443\n"
             "  python main.py --target 127.0.0.1 --ports 22,80,443\n"
             "  python main.py --target 127.0.0.1 --ports 1-1000\n"
-            "  python main.py --target localhost --ports 20-100 --threads 50 --timeout 0.5\n"
+            "  python main.py --target localhost --ports 20-100 --threads 50 --timeout 1\n"
             "  python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json\n"
             "  python main.py --target 127.0.0.1 --ports 22 --format csv\n"
             "  python main.py --target 127.0.0.1 --profile quick --format pdf\n"
@@ -165,7 +167,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout",
         default=str(DEFAULT_TIMEOUT),
-        help=f"Connect timeout in seconds (default: {DEFAULT_TIMEOUT})",
+        help=(
+            f"Per-port connect/UDP wait in seconds "
+            f"({MIN_TIMEOUT:g}-{MAX_TIMEOUT:g}; default: {DEFAULT_TIMEOUT:g}). "
+            "Higher reduces false TIMEOUT on slow hosts; lower speeds local scans"
+        ),
     )
     parser.add_argument(
         "--threads",
