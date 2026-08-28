@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.26.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--timeout` is the per-port wait (`0.05`–`60` seconds; default `0.5`). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.27.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--timeout` is the per-port wait (`0.05`–`60` seconds; default `0.5`). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -81,40 +81,16 @@ python main.py --list-profiles
 python main.py --target 127.0.0.1 --ports 22,80,443 --timeout 1
 ```
 
-`--timeout` is the **per-port** connect/UDP wait (default `0.5` seconds, allowed `0.05`–`60`). Raise it on slow lab links to cut false TIMEOUT; lower it for faster local checks. Full flag list below.
+`--timeout` is the **per-port** connect/UDP wait (default `0.5` seconds, allowed `0.05`–`60`). Raise it on slow lab links to cut false TIMEOUT; lower it for faster local checks. Flag reference below; longer recipes are in [CLI Examples](#cli-examples).
 
 ## Usage
 
 ```powershell
 python main.py --help
 python main.py --version
-python main.py --gui
-python main.py --target 127.0.0.1 --ports 1-1000
-python main.py --target 127.0.0.1 --ports 22,80,443
-python main.py --target 127.0.0.1 --profile quick
-python main.py --target ::1 --profile quick
-python main.py --target localhost --ipv6 --ports 22,80,443
-python main.py --target 127.0.0.1 --udp --profile quick --show-closed
-python main.py --target 127.0.0.1 --discover
-python main.py --target 192.168.1.0/24 --discover --show-closed
-python main.py --target 127.0.0.1 --profile quick --interval 60 --runs 3
-python main.py --history
-python main.py --history-id 3
-python main.py --history-diff 3 4
-python main.py --target-file hosts.txt --profile quick
-python main.py --target 127.0.0.1 --profile quick --exclude 80,443
-python main.py --target 127.0.0.1 --ports 80 --json
-python main.py --history --json
-python main.py --history-id 3 --json
-python main.py --target 127.0.0.1 --ports 80 --json --exit-open
-python main.py --target 127.0.0.1 --profile quick --no-banner
-python main.py --list-profiles
-python main.py --list-profiles --udp
-python main.py --list-profiles --json
-python main.py --target 127.0.0.1 --ports 80 --quiet
-python main.py --target 127.0.0.1 --ports 80 --json --quiet
-python main.py --target 127.0.0.1 --ports 22,80 --timeout 1
 ```
+
+Everyday commands stay in [Quick start](#quick-start). The table lists every flag; copy-paste recipes are in [CLI Examples](#cli-examples).
 
 | Flag | Meaning |
 |---|---|
@@ -151,7 +127,10 @@ Closed and timeout ports are hidden on the CLI unless `--show-closed` is set. Th
 
 ## CLI Examples
 
+Authorized targets only. Start with [Quick start](#quick-start) if you only need the basics.
+
 ```powershell
+# Ports, profiles, IPv6
 python main.py --target 127.0.0.1 --ports 1-1000
 python main.py --target 127.0.0.1 --ports 22,80,443
 python main.py --target 127.0.0.1 --profile quick
@@ -159,20 +138,29 @@ python main.py --target ::1 --profile quick
 python main.py --target localhost --ipv6 --ports 22,80,443
 python main.py --target 127.0.0.1 --profile common --show-closed
 python main.py --target localhost --ports 20-100 --threads 50 --timeout 1
+python main.py --target 127.0.0.1 --ports 22,80 --timeout 1
+
+# Reports
 python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json
 python main.py --target 127.0.0.1 --ports 22 --format csv
 python main.py --target 127.0.0.1 --profile quick --format html
 python main.py --target 127.0.0.1 --profile quick --format pdf
+
+# UDP and discovery
 python main.py --target 127.0.0.1 --udp --ports 53,123,161 --show-closed
 python main.py --target 127.0.0.1 --udp --profile quick --show-closed
 python main.py --target 127.0.0.1 --discover
 python main.py --target 192.168.1.0/24 --discover --show-closed
+
+# Schedule and history
 python main.py --target 127.0.0.1 --profile quick --interval 60 --runs 3
 python main.py --history
 python main.py --history --target 127.0.0.1
 python main.py --history-id 3
 python main.py --history-id 3 --format html
 python main.py --history-diff 3 4
+
+# Inventory, exclude, notes
 python main.py --target 127.0.0.1 --ports 21,23
 python main.py --target 127.0.0.1 --ports 21,23 --no-refs
 python main.py --target 127.0.0.1 --profile quick --no-diff
@@ -180,6 +168,8 @@ python main.py --target-file hosts.txt --profile quick
 python main.py --target-file nets.txt --discover --show-closed
 python main.py --target 127.0.0.1 --profile quick --exclude 80,443
 python main.py --target 127.0.0.1 --ports 1-1023 --exclude 80,443
+
+# JSON, scripting helpers, catalogs
 python main.py --target 127.0.0.1 --ports 80 --json
 python main.py --history --json
 python main.py --history-id 3 --json
