@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Final
 
 from scanner.constants import (
+    ABSOLUTE_MAX_PORTS,
     MAX_DISCOVERY_HOSTS,
     MAX_INTERVAL,
     MAX_PORT,
@@ -237,6 +238,43 @@ def exclude_ports(ports: Sequence[int], spec: str | None) -> list[int]:
     remaining = [port for port in remaining if port not in blocked]
     if not remaining:
         raise ValidationError("No ports left after exclude.")
+    return remaining
+
+
+def validate_max_ports(value: int | str) -> int:
+    """Return how many ports one scan may probe (1–ABSOLUTE_MAX_PORTS)."""
+    if isinstance(value, bool) or value is None:
+        raise ValidationError(
+            f"Max ports must be between 1 and {ABSOLUTE_MAX_PORTS}."
+        )
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned.isdigit():
+            raise ValidationError(
+                f"Max ports must be between 1 and {ABSOLUTE_MAX_PORTS}."
+            )
+        parsed = int(cleaned)
+    elif isinstance(value, int):
+        parsed = value
+    else:
+        raise ValidationError(
+            f"Max ports must be between 1 and {ABSOLUTE_MAX_PORTS}."
+        )
+    if parsed < 1 or parsed > ABSOLUTE_MAX_PORTS:
+        raise ValidationError(
+            f"Max ports must be between 1 and {ABSOLUTE_MAX_PORTS}."
+        )
+    return parsed
+
+
+def limit_port_count(ports: Sequence[int], max_ports: int) -> list[int]:
+    """Return ports unchanged, or reject if the list exceeds max_ports."""
+    remaining = list(ports)
+    if len(remaining) > max_ports:
+        raise ValidationError(
+            f"Port list has {len(remaining)} ports; maximum is {max_ports} "
+            f"(raise with --max-ports, up to {ABSOLUTE_MAX_PORTS})."
+        )
     return remaining
 
 

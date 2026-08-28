@@ -81,6 +81,10 @@ def test_parser_accepts_profile_or_ports() -> None:
         ["--target", "127.0.0.1", "--ports", "80", "--open-only"]
     )
     assert open_only.open_only is True
+    max_ports = parser.parse_args(
+        ["--target", "127.0.0.1", "--ports", "1-100", "--max-ports", "100"]
+    )
+    assert max_ports.max_ports == "100"
 
 
 def test_run_rejects_discover_combined_with_scan_flags() -> None:
@@ -795,3 +799,68 @@ def test_run_rejects_open_only_combos() -> None:
         run(["--target", "127.0.0.1", "--ports", "80", "--open-only", "--show-closed"])
     with pytest.raises(SystemExit):
         run(["--gui", "--open-only"])
+
+
+def test_max_ports_rejects_oversized_list(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    called = {"scan": False}
+
+    class FakeScanner:
+        def scan(self, *_args: object, **_kwargs: object) -> ScanReport:
+            called["scan"] = True
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=1,
+                end_port=5000,
+                timeout=0.5,
+                results=[],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert run(["--target", "127.0.0.1", "--ports", "1-5000"]) == 1
+    assert called["scan"] is False
+    assert "maximum is" in capsys.readouterr().err.lower()
+
+
+def test_max_ports_allows_raised_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("cli.interface.record_report", lambda *_a, **_k: 1)
+    monkeypatch.setattr(
+        "cli.interface.ScanHistory.previous_for",
+        lambda _self, _report: None,
+    )
+    seen: list[int] = []
+
+    class FakeScanner:
+        def scan(self, *_args: object, **kwargs: object) -> ScanReport:
+            ports = kwargs.get("ports") or []
+            seen.append(len(list(ports)))
+            return ScanReport(
+                target="127.0.0.1",
+                resolved_ip="127.0.0.1",
+                start_port=1,
+                end_port=5000,
+                timeout=0.5,
+                results=[PortScanResult(port=1, state=PortState.CLOSED)],
+            )
+
+    monkeypatch.setattr("cli.interface.TcpConnectScanner", FakeScanner)
+    assert (
+        run(
+            [
+                "--target",
+                "127.0.0.1",
+                "--ports",
+                "1-5000",
+                "--max-ports",
+                "5000",
+                "--quiet",
+            ]
+        )
+        == 0
+    )
+    assert seen == [5000]

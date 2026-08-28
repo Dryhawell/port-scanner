@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/Dryhawell/port-scanner/actions/workflows/tests.yml)
 
-Version **1.28.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--open-only` keeps JSON/CSV/HTML/PDF rows to OPEN ports (or UP hosts) while summary counts stay full. `--timeout` is the per-port wait (`0.05`–`60` seconds; default `0.5`). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
+Version **1.29.0** — an educational TCP connect / UDP probe scanner for **authorized** hosts. It can TCP-ping a host or a small IPv4 CIDR, then probe a port range, a comma-separated list, or a named profile on an IPv4/IPv6 address or hostname. `--list-profiles` prints those named sets without opening sockets. `--quiet` trims progress and status chatter for scripts (results and errors stay). `--open-only` keeps JSON/CSV/HTML/PDF rows to OPEN ports (or UP hosts) while summary counts stay full. `--max-ports` caps how many ports one scan may probe (default `4096`; raise up to `65535` for a full range). `--timeout` is the per-port wait (`0.05`–`60` seconds; default `0.5`). `--exclude` drops ports from that list (`80`, `80,443`, or `1-1023`). A UTF-8 `--target-file` lists up to 256 authorized hosts and scans them one after another (not a parallel sweep). It reports OPEN / CLOSED / TIMEOUT (and UP / DOWN for discovery), and can attach a service-name hint, connection time, a parsed passive banner, and a local reference note on some open ports. Repeats stay in the foreground (`--interval` / `--runs`). Completed runs are stored in a local sqlite file (`reports/history.db`) and a new run is compared to the last stored scan of the same target. Counts are drawn as ASCII / SVG / Canvas bars (no matplotlib).
 
 CLI and GUI share the same scan engine. The tool is built with Python 3.12+ and the standard library (Tkinter for the GUI, pytest for tests).
 
@@ -20,6 +20,7 @@ Use it to learn sockets, timeouts, concurrency, and how service banners look on 
 - Sequential inventory from a UTF-8 `--target-file` (one host per line, max 256; comments allowed)
 - Host discovery via TCP ping (`--discover`); IPv4 CIDR `/24` or smaller (max 256 addresses)
 - Inclusive port range `1-65535`, comma-separated lists (`22,80,443`), and named profiles (`quick`, `common`)
+- `--max-ports` rejects oversized lists after `--exclude` (default `4096`; max `65535`) so accidental full-range scans need an explicit raise
 - `--list-profiles` prints TCP and UDP named sets (`quick` / `common`) and exits; no sockets, not a vuln list
 - `--exclude` / `-x` to skip ports from a range or profile (same syntax as `--ports`)
 - Concurrent TCP connect or UDP probe scan via `ThreadPoolExecutor` (default 50 workers, max 200)
@@ -101,6 +102,7 @@ Everyday commands stay in [Quick start](#quick-start). The table lists every fla
 | `--profile` | Named port set: `quick` or `common` (instead of `--ports`) |
 | `--list-profiles` | Print named TCP/UDP port sets and exit (no scan). `--udp` prints UDP only. Do not combine with `--gui`, `--target`, history flags, `--ports` / `--profile`, `--discover`, `--interval` / `--runs`, `--exit-open`, or `--no-banner` |
 | `--exclude` / `-x` | Ports to skip, same syntax as `--ports`. Do not combine with `--discover`. Empty remainder is an error |
+| `--max-ports` | Reject the scan if the port list (after `--exclude`) is longer than N (`1`–`65535`; default `4096`). Raise explicitly for wide lab ranges |
 | `--timeout` | Per-port connect/UDP wait in seconds (`0.05`–`60`; default `0.5`). Higher reduces false TIMEOUT on slow hosts; lower speeds local scans. Not the same as `--interval` |
 | `--threads` | Max workers, `1-200` (default `50`) |
 | `--ipv6` | Resolve hostnames to IPv6 (AAAA). Literals keep their own family |
@@ -141,6 +143,8 @@ python main.py --target localhost --ipv6 --ports 22,80,443
 python main.py --target 127.0.0.1 --profile common --show-closed
 python main.py --target localhost --ports 20-100 --threads 50 --timeout 1
 python main.py --target 127.0.0.1 --ports 22,80 --timeout 1
+python main.py --target 127.0.0.1 --ports 1-10000 --max-ports 10000
+python main.py --target 127.0.0.1 --ports 1-65535 --max-ports 65535
 
 # Reports
 python main.py --target 127.0.0.1 --ports 1-100 --output reports/scan.json
@@ -218,7 +222,7 @@ With `--discover`, a line may be an IPv4 CIDR (`192.168.1.0/24`). Without `--dis
 python main.py --gui
 ```
 
-Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Exclude ports**, **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Skip banners**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner, Notes. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). **Exclude ports** uses the same syntax as `--ports` and is ignored (rejected) during host discovery. **Skip banners** skips the passive TCP recv (rejected with UDP or host discovery). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE REPORT** writes HTML or PDF (the file extension chooses the format). **HISTORY** lists stored runs from `reports/history.db`; double-click or **LOAD** to show one in the table. A bar chart under the progress bar shows OPEN / CLOSED / TIMEOUT (or UP / DOWN); the history window charts hits across stored runs. A single scan’s status line can include `vs history #N` when a previous stored run of the same target exists. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
+Fields: target (or IPv4 CIDR), start/end port, timeout, threads, profile (Custom / Quick / Common), **Exclude ports**, **Protocol** (TCP / UDP), **Prefer IPv6**, **Host discovery**, **Skip banners**, **Interval (s)** / **Runs**, **START SCAN**. Leave interval empty for a single scan. Set interval (at least 5 seconds) and runs greater than 1 to repeat in this window — not a system task scheduler. Below: status, open-port (or live-host) count, progress bar, result table. Port-scan columns: Port, State, Protocol, Service, Product, Response Time, Banner, Notes. Discovery columns: Host, State, Evidence, Response Time. Quick and Common ignore the start/end fields; UDP uses a different port set (DNS, NTP, SNMP, …). **Exclude ports** uses the same syntax as `--ports` and is ignored (rejected) during host discovery. Custom ranges longer than **4096** ports are rejected (same default as CLI `--max-ports`; use the CLI to raise the cap). **Skip banners** skips the passive TCP recv (rejected with UDP or host discovery). Host discovery ignores ports, profile, and UDP: it TCP-pings 80, 443, 22, and 445. After a run finishes, **SAVE REPORT** writes HTML or PDF (the file extension chooses the format). **HISTORY** lists stored runs from `reports/history.db`; double-click or **LOAD** to show one in the table. A bar chart under the progress bar shows OPEN / CLOSED / TIMEOUT (or UP / DOWN); the history window charts hits across stored runs. A single scan’s status line can include `vs history #N` when a previous stored run of the same target exists. IPv4/IPv6 literals pick their family; **Prefer IPv6** only changes hostname resolution (AAAA).
 
 The GUI still takes **one target**. Use `--target-file` on the CLI for a small authorized inventory.
 
@@ -278,7 +282,7 @@ main.py                 entry point
 cli/interface.py        argparse, console report
 gui/app.py              Tkinter UI + background worker
 scanner/
-  validator.py          target / CIDR / target file / ports / exclude / timeout / threads / interval
+  validator.py          target / CIDR / target file / ports / exclude / max-ports / timeout / threads / interval
   scanner.py            TCP connect and UDP probe engine
   discover.py           TCP ping host discovery
   compare.py            newly open / gone ports between runs
@@ -499,6 +503,7 @@ GitHub Actions runs `python -m ruff check .` on Ubuntu and `python -m pytest` on
 - `--list-profiles` is a catalog of named port sets for `--profile`, not a scan and not a vulnerability list. It does not open sockets
 - `--quiet` hides progress and status lines only; it does not change scan behavior, hide OPEN results, or replace `--json`
 - `--open-only` filters exported/`--json` result rows; it does not change the scan, sqlite history, or summary counts. Human CLI already hides CLOSED/TIMEOUT unless `--show-closed`
+- `--max-ports` is a size guard after `--exclude`, not a stealth or rate limit. Default `4096`; the GUI uses the same default. Full `1-65535` needs `--max-ports 65535`
 - `--timeout` is per port (and per discovery probe), not a wall-clock limit for the whole run; values outside `0.05`–`60` are rejected
 - `--exit-open` is a script helper, not an alert: CLOSED and TIMEOUT do not trigger exit `2`. Default scans still exit `0` when they finish
 - GitHub Actions runs ruff plus mocked unit tests on Ubuntu and Windows; it does not scan hosts and is not a security audit of pull requests

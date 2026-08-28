@@ -14,9 +14,11 @@ import time
 from pathlib import Path
 
 from scanner.constants import (
+    ABSOLUTE_MAX_PORTS,
     APP_NAME,
     APP_VERSION,
     DEFAULT_HISTORY_LIMIT,
+    DEFAULT_MAX_PORTS,
     DEFAULT_MAX_WORKERS,
     DEFAULT_TIMEOUT,
     EXIT_OPEN,
@@ -49,10 +51,12 @@ from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import (
     ValidationError,
     exclude_ports,
+    limit_port_count,
     parse_ports,
     parse_target_file,
     resolve_scan_profile,
     validate_interval,
+    validate_max_ports,
     validate_runs,
     validate_target,
 )
@@ -116,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python main.py --target 127.0.0.1 --ports 80 --quiet\n"
             "  python main.py --target 127.0.0.1 --ports 80 --json --quiet\n"
             "  python main.py --target 127.0.0.1 --ports 1-100 --json --open-only\n"
+            "  python main.py --target 127.0.0.1 --ports 1-10000 --max-ports 10000\n"
             "\n"
             "Closed and timeout ports are hidden unless --show-closed is set. "
             "Too many threads can slow this machine and inflate timeouts."
@@ -164,6 +169,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude",
         "-x",
         help="Ports to skip, same syntax as --ports (80, 22,80,443, or 1-1023)",
+    )
+    parser.add_argument(
+        "--max-ports",
+        default=str(DEFAULT_MAX_PORTS),
+        help=(
+            f"Reject a port list longer than N "
+            f"(1-{ABSOLUTE_MAX_PORTS}; default: {DEFAULT_MAX_PORTS}). "
+            "Guards against accidental 1-65535; applied after --exclude"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -741,12 +755,14 @@ def _run_scan(
 
     try:
         target = validate_target(args.target)
+        max_ports = validate_max_ports(args.max_ports)
         port_list = (
             resolve_scan_profile(args.profile, protocol=protocol)
             if args.profile
             else parse_ports(args.ports)
         )
         port_list = exclude_ports(port_list, args.exclude)
+        port_list = limit_port_count(port_list, max_ports)
     except ValidationError as exc:
         return _cli_error(logger, exc), None
 

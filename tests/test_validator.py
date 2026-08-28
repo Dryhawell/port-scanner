@@ -6,16 +6,24 @@ from pathlib import Path
 
 import pytest
 
-from scanner.constants import MAX_TARGET_FILE_HOSTS, SCAN_PROFILES, UDP_SCAN_PROFILES
+from scanner.constants import (
+    ABSOLUTE_MAX_PORTS,
+    DEFAULT_MAX_PORTS,
+    MAX_TARGET_FILE_HOSTS,
+    SCAN_PROFILES,
+    UDP_SCAN_PROFILES,
+)
 from scanner.validator import (
     ValidationError,
     exclude_ports,
+    limit_port_count,
     parse_discovery_targets,
     parse_port_range,
     parse_ports,
     parse_target_file,
     resolve_scan_profile,
     validate_interval,
+    validate_max_ports,
     validate_port,
     validate_port_range,
     validate_protocol,
@@ -125,6 +133,19 @@ def test_exclude_ports_filters_and_keeps_order() -> None:
     assert exclude_ports([22, 80], "3389") == [22, 80]
     with pytest.raises(ValidationError, match="No ports left"):
         exclude_ports([80, 443], "80,443")
+
+
+def test_max_ports_limit() -> None:
+    assert validate_max_ports(str(DEFAULT_MAX_PORTS)) == DEFAULT_MAX_PORTS
+    assert validate_max_ports(ABSOLUTE_MAX_PORTS) == ABSOLUTE_MAX_PORTS
+    with pytest.raises(ValidationError, match="between 1 and"):
+        validate_max_ports(0)
+    with pytest.raises(ValidationError, match="between 1 and"):
+        validate_max_ports(ABSOLUTE_MAX_PORTS + 1)
+    ports = list(range(1, 101))
+    assert limit_port_count(ports, 100) == ports
+    with pytest.raises(ValidationError, match="maximum is 50"):
+        limit_port_count(ports, 50)
 
 
 def test_resolve_scan_profile() -> None:

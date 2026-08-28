@@ -16,6 +16,7 @@ from typing import Any
 from scanner.advisory import advisory_label
 from scanner.constants import (
     APP_VERSION,
+    DEFAULT_MAX_PORTS,
     DEFAULT_MAX_WORKERS,
     DEFAULT_TIMEOUT,
     PROTOCOL_UDP,
@@ -36,6 +37,7 @@ from scanner.scanner import ScannerError, TcpConnectScanner
 from scanner.validator import (
     ValidationError,
     exclude_ports,
+    limit_port_count,
     validate_interval,
     validate_port_range,
     validate_runs,
@@ -580,6 +582,7 @@ class ScannerApp:
                 start, end = validate_port_range(start_port, end_port)
                 port_list = list(range(start, end + 1))
             port_list = exclude_ports(port_list, exclude)
+            port_list = limit_port_count(port_list, DEFAULT_MAX_PORTS)
             return self._scanner.scan(
                 target,
                 timeout=timeout,
